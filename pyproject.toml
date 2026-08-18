@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openjarvis"
+version = "0.1.0"
+description = "OpenJarvis - an open-source, voice-first AI desktop agent that actually operates your computer."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Liaqat Eagle" }]
+keywords = ["ai", "agent", "assistant", "voice", "jarvis", "llm", "groq", "openai", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Utilities",
+]
+
+dependencies = [
+    "openai>=1.40",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "rich>=13.7",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+# The full Jarvis experience: wake word, mic capture, speech synthesis.
+voice = [
+    "sounddevice>=0.4.6",
+    "numpy>=1.24",
+    "openwakeword>=0.6.0",
+    "onnxruntime>=1.17",
+    "edge-tts>=6.1",   # free neural voices, no API key
+    "pyttsx3>=2.90",   # offline fallback (SAPI5 / NSSpeech / espeak)
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+jarvis = "openjarvis.cli:main"
+openjarvis = "openjarvis.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/LiaqatEagle/OpenJarvis"
+Repository = "https://github.com/LiaqatEagle/OpenJarvis"
+Issues = "https://github.com/LiaqatEagle/OpenJarvis/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openjarvis"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "BLE"]
+ignore = ["B008"]  # typer uses function calls in defaults
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["openjarvis"]
+ignore_missing_imports = true

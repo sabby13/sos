@@ -1,0 +1,11 @@
+# Core runtime - text mode (`jarvis chat`, `jarvis ask`) and every tool.
+# Voice mode needs requirements-voice.txt as well.
+#
+# Equivalent to: pip install -e .
+
+openai>=1.40
+pydantic>=2.6
+pyyaml>=6.0
+python-dotenv>=1.0
+rich>=13.7
+typer>=0.12

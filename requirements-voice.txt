@@ -1,0 +1,13 @@
+# Voice mode - wake word, microphone capture, speech synthesis.
+# This is the full OpenJarvis experience.
+#
+# Equivalent to: pip install -e ".[voice]"
+
+-r requirements.txt
+
+sounddevice>=0.4.6      # PortAudio bindings for microphone capture
+numpy>=1.24             # audio buffers and the energy VAD
+openwakeword>=0.6.0     # local "hey jarvis" detection
+onnxruntime>=1.17       # inference backend for the wake-word model
+edge-tts>=6.1           # free neural voices, no API key
+pyttsx3>=2.90           # offline TTS fallback (SAPI5 / NSSpeech / espeak)
