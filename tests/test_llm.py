@@ -134,7 +134,7 @@ def test_rate_limit_wait_over_budget_fails_without_sleeping(monkeypatch):
     def call():
         raise error
 
-    with pytest.raises(ProviderError, match="exceeding the configured 2.0s total retry budget"):
+    with pytest.raises(ProviderError, match=r"exceeding the configured 2\.0s total retry budget"):
         provider._request(call)
 
     assert sleeps == []
@@ -154,7 +154,7 @@ def test_cumulative_rate_limit_wait_cannot_exceed_budget(monkeypatch):
     def call():
         raise next(responses)
 
-    with pytest.raises(ProviderError, match="3.0s already waited"):
+    with pytest.raises(ProviderError, match=r"3\.0s already waited"):
         provider._request(call)
 
     assert sleeps == [3.0]
