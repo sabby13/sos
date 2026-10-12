@@ -180,7 +180,7 @@ def chat(ctx: typer.Context) -> None:
     agent = state.build_agent()
 
     console.print()
-    console.print("[jarvis]OpenJarvis[/jarvis] [muted]text mode[/muted]")
+    console.print("[jarvis]Sienna[/jarvis] [muted]text mode[/muted]")
     console.print(
         f"[muted]  {agent.provider.name}/{agent.provider.model}   "
         f"{len(agent.registry)} tools   safety: {agent.policy.describe()}[/muted]"

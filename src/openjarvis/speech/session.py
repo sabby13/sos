@@ -4,7 +4,7 @@
          ->  run the agent  ->  speak the reply  ->  listen again briefly
 
 The follow-up window is what makes it feel like a conversation rather than a vending
-machine: for a few seconds after each reply, Jarvis keeps listening without needing the
+machine: for a few seconds after each reply, Sienna keeps listening without needing the
 wake word, so "open Chrome" / "now go to GitHub" works as two sentences.
 """
 
@@ -106,7 +106,7 @@ class VoiceSession:
         """Record and transcribe one utterance. None means nothing usable was heard."""
         speech = self.settings.speech
         if prompt:
-            console.print("[jarvis]listening[/jarvis] [muted](speak now)[/muted]")
+            console.print("[jarvis]Sienna[/jarvis] [muted](listening; speak now)[/muted]")
 
         utterance = record_utterance(
             self.mic,
@@ -180,7 +180,7 @@ class VoiceSession:
 
     def _banner(self) -> None:
         console.print()
-        console.print("[jarvis]OpenJarvis[/jarvis] [muted]voice mode[/muted]")
+        console.print("[jarvis]Sienna[/jarvis] [muted]voice mode[/muted]")
         console.print(
             f"[muted]  wake: {self.detector.label}   "
             f"brain: {self.agent.provider.name}/{self.agent.provider.model}   "

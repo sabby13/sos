@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from openjarvis.agent.prompts import SYSTEM_PROMPT, TRANSCRIPTION_HINT
 from openjarvis.config import DEFAULT_LLM_MODELS, DEFAULT_TTS_VOICES, Settings
 from openjarvis.errors import ConfigError
 from openjarvis.speech.stt import clean_transcript, strip_wake_word
@@ -20,6 +21,19 @@ def test_defaults_are_usable_with_no_config_file(tmp_path):
     assert cfg.llm.provider == "groq"
     assert cfg.llm.resolved_model() == DEFAULT_LLM_MODELS["groq"]
     assert cfg.speech.tts_engine == "edge"
+    assert cfg.speech.wake_word == "hey_jarvis"
+
+
+def test_assistant_identity_and_transcription_vocabulary():
+    assert "You are Sienna" in SYSTEM_PROMPT
+    assert "OpenJarvis" not in SYSTEM_PROMPT
+    assert "HelloSienna" in TRANSCRIPTION_HINT
+    assert "Sienna" in TRANSCRIPTION_HINT
+
+
+def test_existing_wake_word_loads_from_yaml(tmp_path):
+    path = write_config(tmp_path, "speech:\n  wake_word: hey_jarvis\n")
+    assert Settings.load(path).speech.wake_word == "hey_jarvis"
 
 
 def test_yaml_overrides_defaults(tmp_path):
