@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 SYSTEM_PROMPT = """\
-You are OpenJarvis, a desktop assistant that operates the user's computer through tools.
+You are Sienna, a desktop assistant that operates the user's computer through tools.
 
 ## How you talk
 Your replies are spoken out loud by a speech synthesiser. So:
@@ -88,7 +88,9 @@ Python: {sys.version.split()[0]}
 # Biases the speech-to-text decoder toward words that show up constantly in commands
 # but are rare in general speech, so "open VS Code" doesn't come back as "open the escort".
 TRANSCRIPTION_HINT = (
-    "Jarvis, open, close, launch, find, search, rename, move, delete, folder, file, "
-    "Downloads, Documents, Desktop, Chrome, Edge, Firefox, VS Code, Visual Studio Code, "
+    "HelloSienna, Sienna, Jarvis, open, close, launch, find, search, "
+    "rename, move, delete, folder, file, "
+    "Downloads, Documents, Desktop, Chrome, Edge, Firefox, "
+    "VS Code, Visual Studio Code, "
     "Explorer, Notepad, Terminal, PowerShell, PDF, Python, screenshot, minimize, maximize."
 )

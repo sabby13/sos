@@ -95,6 +95,12 @@ class Agent:
             completion = self.provider.complete([self._system, *self._history], schemas)
             stats.prompt_tokens += completion.prompt_tokens
             stats.completion_tokens += completion.completion_tokens
+            if completion.prompt_tokens or completion.completion_tokens:
+                log.debug(
+                    "provider usage: prompt_tokens=%d completion_tokens=%d",
+                    completion.prompt_tokens,
+                    completion.completion_tokens,
+                )
             self._history.append(completion.message)
 
             if not completion.wants_tools:

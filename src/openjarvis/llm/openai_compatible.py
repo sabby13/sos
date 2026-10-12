@@ -8,7 +8,11 @@ speech-to-text, and text-to-speech.
 from __future__ import annotations
 
 import io
+import random
+import re
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import openai
@@ -24,8 +28,13 @@ log = get_logger("llm")
 _RETRYABLE = (
     openai.APIConnectionError,
     openai.APITimeoutError,
-    openai.RateLimitError,
     openai.InternalServerError,
+)
+
+_MAX_BACKOFF_S = 8.0
+_GROQ_RESET_HEADERS = (
+    "x-ratelimit-reset-tokens",
+    "x-ratelimit-reset-requests",
 )
 
 
@@ -43,12 +52,16 @@ class OpenAICompatibleProvider:
         max_tokens: int = 1024,
         timeout_s: float = 60.0,
         max_retries: int = 3,
+        rate_limit_max_wait_s: float = 8.0,
     ) -> None:
         self.name = name
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries
+        if not 0 <= rate_limit_max_wait_s <= 30:
+            raise ValueError("rate_limit_max_wait_s must be between 0 and 30 seconds")
+        self.rate_limit_max_wait_s = rate_limit_max_wait_s
         # We do our own retry loop so we can log between attempts.
         self._client = openai.OpenAI(
             api_key=api_key, base_url=base_url, timeout=timeout_s, max_retries=0
@@ -145,10 +158,36 @@ class OpenAICompatibleProvider:
     def _request(self, call):  # type: ignore[no-untyped-def]
         """Run ``call`` with exponential backoff, translating SDK errors."""
         delay = 1.0
+        rate_limit_waited = 0.0
         last_exc: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
                 return call()
+            except openai.RateLimitError as exc:
+                last_exc = exc
+                if attempt == self.max_retries:
+                    raise self._rate_limit_error(attempt, rate_limit_waited) from exc
+
+                retry_delay = _rate_limit_retry_delay(exc, self.name)
+                if retry_delay is None:
+                    retry_delay = random.uniform(
+                        delay / 2, min(delay, _MAX_BACKOFF_S)
+                    )
+                    delay = min(delay * 2, _MAX_BACKOFF_S)
+
+                if rate_limit_waited + retry_delay > self.rate_limit_max_wait_s:
+                    raise self._rate_limit_error(
+                        attempt,
+                        rate_limit_waited,
+                        requested_wait=retry_delay,
+                    ) from exc
+
+                log.warning(
+                    "%s rate limited; retrying in %.1fs [%d/%d]",
+                    self.name, retry_delay, attempt, self.max_retries,
+                )
+                time.sleep(retry_delay)
+                rate_limit_waited += retry_delay
             except _RETRYABLE as exc:
                 last_exc = exc
                 if attempt == self.max_retries:
@@ -196,6 +235,32 @@ class OpenAICompatibleProvider:
             hint="Check your network connection, or try the other provider with --provider.",
         ) from last_exc
 
+    def _rate_limit_error(
+        self,
+        attempt: int,
+        waited: float,
+        *,
+        requested_wait: float | None = None,
+    ) -> ProviderError:
+        provider = "Groq" if self.name.lower() == "groq" else self.name
+        if requested_wait is not None:
+            remaining = max(0.0, self.rate_limit_max_wait_s - waited)
+            return ProviderError(
+                f"{provider} rate limit retry needs {requested_wait:.1f}s after "
+                f"{waited:.1f}s already waited, exceeding the configured "
+                f"{self.rate_limit_max_wait_s:.1f}s total retry budget "
+                f"({remaining:.1f}s remaining). No further retry was attempted.",
+                hint=(
+                    "Retry later or lower llm.history_turns and llm.max_tokens "
+                    "for voice commands."
+                ),
+            )
+        return ProviderError(
+            f"{provider} rate limit persisted after {attempt} attempts and "
+            f"{waited:.1f}s of retry waits.",
+            hint="Retry shortly or lower llm.history_turns and llm.max_tokens for voice commands.",
+        )
+
     def list_models(self) -> list[str]:
         try:
             return sorted(m.id for m in self._client.models.list().data)
@@ -211,6 +276,55 @@ def _is_tool_use_failure(exc: openai.BadRequestError) -> bool:
         if isinstance(error, dict) and error.get("code") == "tool_use_failed":
             return True
     return "tool_use_failed" in str(exc)
+
+
+def _rate_limit_retry_delay(exc: openai.RateLimitError, provider: str) -> float | None:
+    """Return the longest valid server delay, if the response provides one."""
+    headers = getattr(getattr(exc, "response", None), "headers", {})
+    values = [_parse_retry_after(headers.get("retry-after"))]
+    if provider.lower() == "groq":
+        values.extend(_parse_reset_duration(headers.get(name)) for name in _GROQ_RESET_HEADERS)
+    valid = [value for value in values if value is not None]
+    return max(valid) if valid else None
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse Retry-After as delta-seconds or an HTTP date."""
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+        return seconds if seconds >= 0 else None
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _parse_reset_duration(value: str | None) -> float | None:
+    """Parse Groq reset durations such as ``1.5s`` or ``1m2.5s``."""
+    if not value:
+        return None
+    text = value.strip().lower()
+    try:
+        seconds = float(text)
+        return seconds if seconds >= 0 else None
+    except ValueError:
+        pass
+
+    match = re.fullmatch(
+        r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?",
+        text,
+    )
+    if not match or not any(match.groups()):
+        return None
+    hours, minutes, seconds = (float(part or 0) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
 
 
 def build_provider(settings: Settings, *, provider: str | None = None) -> OpenAICompatibleProvider:
@@ -230,6 +344,7 @@ def build_provider(settings: Settings, *, provider: str | None = None) -> OpenAI
         temperature=settings.llm.temperature,
         max_tokens=settings.llm.max_tokens,
         timeout_s=settings.llm.timeout_s,
+        rate_limit_max_wait_s=settings.llm.rate_limit_max_wait_s,
     )
 
 
@@ -241,4 +356,5 @@ def build_audio_provider(settings: Settings, provider: str) -> OpenAICompatibleP
         base_url=settings.base_url_for(provider),
         model="",
         timeout_s=settings.llm.timeout_s,
+        rate_limit_max_wait_s=settings.llm.rate_limit_max_wait_s,
     )

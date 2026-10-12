@@ -61,7 +61,7 @@ def say_user(text: str) -> None:
 
 
 def say_jarvis(text: str) -> None:
-    console.print(f"[jarvis]jarvis[/jarvis] {escape(text)}")
+    console.print(f"[jarvis]Sienna[/jarvis] {escape(text)}")
 
 
 def say_tool(text: str) -> None:
