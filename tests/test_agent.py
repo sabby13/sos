@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from conftest import FakeProvider, text_completion, tool_completion
 from openjarvis.agent.loop import Agent
+from openjarvis.errors import ProviderError
+from openjarvis.llm.base import Completion, Message
 from openjarvis.safety.confirm import AutoConfirmer, DenyConfirmer
 from openjarvis.tools.registry import ToolRegistry, default_registry
 
@@ -58,6 +61,63 @@ def test_tool_results_are_fed_back_to_the_model(settings, platform, tmp_path):
     # The second request must contain the tool's output, or the model is answering blind.
     second_request = agent.provider.seen[1]
     assert any(m.role == "tool" and "a.txt" in (m.content or "") for m in second_request)
+
+
+def test_provider_failure_after_tool_execution_does_not_replay_action(
+    settings, platform, tmp_path
+):
+    class ProviderFailsAfterLaunch:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, messages, tools=None):
+            self.calls += 1
+            if self.calls == 1:
+                return tool_completion("launch_application", '{"app": "Chrome"}')
+            raise ProviderError("rate limit")
+
+        def transcribe(self, audio, *, filename="speech.wav"):
+            return "transcribed"
+
+    provider = ProviderFailsAfterLaunch()
+    agent = Agent(
+        settings=settings,
+        provider=provider,
+        registry=default_registry(),
+        confirmer=AutoConfirmer(),
+    )
+    agent.ctx.platform = platform
+    agent.ctx.cwd = str(tmp_path)
+
+    try:
+        agent.ask("open Chrome")
+    except ProviderError as exc:
+        assert exc.message == "rate limit"
+    else:
+        raise AssertionError("expected provider failure after the launch")
+
+    assert provider.calls == 2
+    assert len(platform.launched) == 1
+
+
+def test_usage_debug_log_uses_provider_metadata_without_logging_transcript(
+    settings, platform, tmp_path, caplog
+):
+    usage = Completion(
+        message=Message.assistant("Done."),
+        prompt_tokens=17,
+        completion_tokens=4,
+    )
+    agent = build_agent(settings, platform, tmp_path, [usage])
+
+    with caplog.at_level(logging.DEBUG, logger="openjarvis.agent"):
+        agent.ask("private spoken text")
+
+    assert "prompt_tokens=17 completion_tokens=4" in caplog.text
+    assert "private spoken text" not in caplog.text
 
 
 def test_a_failing_tool_does_not_end_the_turn(settings, platform, tmp_path):

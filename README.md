@@ -1,184 +1,177 @@
-<h1 align="center">OpenJarvis</h1>
-
 <p align="center">
-  <strong>An open-source, voice-first AI agent that actually operates your computer.</strong><br>
-  Say "hey Jarvis" and talk to your desktop.
+  <img src="assets/hellosienna-hero.png"
+       alt="HelloSienna — Voice-Activated Desktop Assistant"
+       width="100%">
 </p>
 
+<h1 align="center">HelloSienna</h1>
+
 <p align="center">
-  <a href="#install"><img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue"></a>
-  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
-  <img alt="Windows" src="https://img.shields.io/badge/platform-Windows-informational">
+  <strong>A voice for your digital world.</strong>
+  <br>
+  An experimental, voice-activated Windows desktop assistant built on OpenJarvis.
 </p>
 
----
+## Overview
 
-OpenJarvis listens for a wake word, transcribes what you said, decides which tools to
-run, and does it — then tells you what happened, out loud.
+HelloSienna is an experimental proof of concept using the OpenJarvis voice and desktop
+automation engine. **Sienna** is the assistant's conversational identity. The current
+activation phrase remains **"Hey Jarvis"** because the installed wake-word model is trained
+for that phrase. **"HelloSienna" is a planned future activation phrase** and is not supported
+until a compatible wake-word model has been trained and tested.
 
-```
-you    hey jarvis... find my latest PDF and open it
-  -> find_files(extensions=['pdf'], newest_first=True)
-  -> open_file(path='...\Downloads\invoice-april.pdf')
-jarvis Found invoice-april.pdf from yesterday. Opening it now.
-```
+The assistant captures speech, transcribes it, uses an LLM to select desktop tools, applies
+the configured safety policy, and speaks its response. The existing OpenJarvis package,
+CLI commands, and configuration identifiers are retained.
 
-Things it handles today:
+HelloSienna is based on [OpenJarvis](https://github.com/LiaqatEagle/OpenJarvis), an MIT
+licensed open-source project. This proof of concept is maintained at
+[sabby13/sos](https://github.com/sabby13/sos).
 
-| You say | What happens |
-|---|---|
-| "Open Chrome" | Finds Chrome in the Start Menu and launches it |
-| "Open VS Code and load my project" | Resolves the folder, launches the editor with it |
-| "Find my latest PDF" | Searches your home folder, sorted by modification time |
-| "Search my computer for Python files" | Whole-drive search (instant if you have Everything) |
-| "Create a folder called Projects" | Creates it, in the right place |
-| "Rename this file to notes.md" | Renames the file you were last working with |
-| "What do I have open?" | Enumerates your windows |
-| "Switch to Spotify" | Focuses the existing window instead of launching a second copy |
-| "Delete that file" | Asks you first, then moves it to the Recycle Bin |
+## Current Features
 
----
+- Voice activation with the existing local openWakeWord "Hey Jarvis" model.
+- Microphone capture with voice activity detection and speech transcription.
+- Groq and OpenAI-compatible LLM and transcription providers.
+- General-purpose application launching, window controls, file search, and file operations.
+- Browser opening and web search.
+- Text-to-speech with Edge neural voices and an offline system-voice fallback.
+- Safety checks for desktop and file actions.
 
-## How it works
+Application launching uses installed-app discovery and aliases. Spotify, YouTube, and the
+Windows Camera app depend on the app or browser being installed and available on the computer.
+The project does not contain dedicated Spotify, YouTube, or camera integrations.
 
-```
-                 "hey jarvis"
-                      |
-              [ wake word ]  openWakeWord, local, ~3% of one CPU core
-                      |
-              [ microphone ]  16 kHz capture + energy VAD (stops when you stop)
-                      |
-              [ transcribe ]  Groq whisper-large-v3-turbo  |  OpenAI whisper-1
-                      |
-              [   agent    ]  Groq gpt-oss-120b  |  OpenAI gpt-4o-mini
-                      |            tool-calling loop, max 12 steps
-                      |
-              [ safety policy ]  safe -> run | caution -> run + log | dangerous -> ask
-                      |
-              [ tool router ]
-                      |
-   +---------+--------+--------+---------+
-   |         |        |        |         |
-  files   search    apps    windows   browser
-   |         |        |        |         |
-   +---------+--------+--------+---------+
-                      |
-              [   speak    ]  edge-tts neural voices (free) | pyttsx3 offline
+## Architecture
+
+```text
+"Hey Jarvis" -> openWakeWord -> microphone capture and VAD -> speech transcription
+     -> Sienna agent and LLM -> safety policy -> desktop and browser tools
+     -> spoken response
 ```
 
-**Every OS call sits behind a platform adapter.** Tools never touch `ctypes` or
-`subprocess` themselves, so porting to macOS or Linux means implementing one file
-(`platforms/base.py`) rather than auditing everything.
+The wake-word model runs locally. Groq Whisper is the default transcription model, Groq is
+the default LLM provider, and Edge neural TTS is the default speech output. OpenAI-compatible
+provider settings are available as alternatives. Desktop operations are routed through
+platform adapters and the general-purpose tool registry.
 
----
+## Installation
 
-## Install
+### Windows setup
 
-### Windows: double-click
+Install Python 3.10 or later, clone this repository, and run the setup script:
 
+```bat
+git clone https://github.com/sabby13/sos.git
+cd sos
+setup.bat
 ```
-git clone https://github.com/LiaqatEagle/OpenJarvis
-cd OpenJarvis
+
+`setup.bat` creates `.venv`, installs the voice dependencies, creates `.env` from
+`.env.example` if needed, and runs the setup diagnostics. Add a provider API key to `.env`
+when prompted. For Groq, use `GROQ_API_KEY`; for OpenAI, use `OPENAI_API_KEY`.
+
+Start voice mode with `jarvis.bat`. It also forwards CLI commands:
+
+```bat
+jarvis.bat doctor
+jarvis.bat voice -k
+jarvis.bat chat
+jarvis.bat ask "open my downloads folder"
 ```
 
-Then **double-click `setup.bat`**. It creates the virtual environment, installs the voice
-extras, writes your `.env`, and opens it so you can paste in an API key. Run it once.
+### Manual installation
 
-After that, **double-click `jarvis.bat`** to start voice mode. That is the whole install.
+From the repository directory, install the voice extras into a virtual environment:
 
-`jarvis.bat` forwards its arguments, so every command below also works as
-`jarvis.bat doctor`, `jarvis.bat chat`, and so on — no need to activate anything first.
-Right-click it → *Send to* → *Desktop (create shortcut)* if you want it one click away.
-
-### Any platform: manual
-
-```bash
-git clone https://github.com/LiaqatEagle/OpenJarvis
-cd OpenJarvis
-
+```powershell
 python -m venv .venv
-.venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # macOS / Linux
-
-pip install -e ".[voice]"        # voice extras: wake word, mic, neural TTS
+.\.venv\Scripts\python.exe -m pip install -e ".[voice]"
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Then add an API key:
+Add the provider key to `.env`, then run `jarvis.bat doctor` and `jarvis.bat` to start voice
+mode. The voice extras include microphone capture, openWakeWord, and speech synthesis.
 
-```bash
-copy .env.example .env           # cp on macOS/Linux
+### Diagnostics
+
+```bat
+jarvis.bat doctor
+jarvis.bat mic
+jarvis.bat tools
+jarvis.bat models
+jarvis.bat devices
+jarvis.bat voices
+jarvis.bat config init
 ```
 
-```ini
-GROQ_API_KEY=gsk_...
+If the wake word never fires, check the microphone first. `jarvis.bat mic` displays input
+levels; `jarvis.bat devices` lists available microphones. Windows may select an inactive
+default input. Set `speech.input_device` in the configuration if needed.
+
+The default Groq LLM is `openai/gpt-oss-120b`. Tool-calling reliability is important because
+the assistant relies on model-generated function calls to operate desktop tools. Use
+`jarvis.bat models` to see models available to your configured provider.
+
+## Configuration
+
+`jarvis config init` creates `~/.openjarvis/config.yaml`. Configuration precedence is
+defaults, YAML, environment variables (including `.env`), then CLI overrides. API keys
+belong in environment variables or `.env`, not in the YAML configuration.
+
+```yaml
+llm:
+  provider: groq
+  model: openai/gpt-oss-120b
+  max_steps: 12
+  max_tokens: 1024
+  history_turns: 20
+  rate_limit_max_wait_s: 8
+
+speech:
+  wake_word: hey_jarvis
+  wake_threshold: 0.5
+  input_device: null
+  stt_provider: groq
+  tts_engine: edge
+  tts_voice: en-US-AndrewNeural
+  silence_ms: 900
+  vad_sensitivity: 2.5
+  followup_window_s: 8.0
+
+tools:
+  app_aliases:
+    music: spotify
 ```
 
-**Groq is the recommended starting point** — it has a free tier, and its
-`whisper-large-v3-turbo` transcription typically returns in under a second, which is the
-difference between an assistant that feels alive and one that feels broken. OpenAI works
-identically; set `OPENAI_API_KEY` and pass `--provider openai`.
+The existing wake-word setting accepts supported built-in model names or a path to a
+compatible custom ONNX model. Setting it to `HelloSienna` alone does not create or train a
+HelloSienna detector. Use `jarvis models` to list models available to the configured
+provider, and `jarvis devices` to list microphone inputs.
 
-Check everything landed:
+For experimental voice sessions with short commands, try `history_turns: 6` to `8` and
+`max_tokens: 512` to reduce request context and reserved output capacity. These are
+configuration choices, not new defaults; use larger values for complex tasks that need
+more conversation context or longer responses. For example:
 
-```bash
-jarvis doctor
+```yaml
+llm:
+  history_turns: 6
+  max_tokens: 512
+  rate_limit_max_wait_s: 8
 ```
 
----
+`rate_limit_max_wait_s` bounds total automatic retry waiting for rate limits (default 8
+seconds, maximum 30); a request that needs longer is stopped with a clear error rather than
+sleeping through a long quota reset. Set `OPENJARVIS_RATE_LIMIT_MAX_WAIT_S` to configure
+the same wait budget from the environment.
 
-## Use
+With `--verbose` debug logging enabled, successful provider responses may report actual
+prompt and completion token usage when the provider supplies it. These diagnostics do not
+log keys, transcripts, prompts, or tool arguments; they are usage metadata, not estimates
+from the requested token limit.
 
-```bash
-jarvis                          # voice mode - say "hey jarvis"
-jarvis voice -k                 # push to talk: press Enter instead of a wake word
-jarvis chat                     # text conversation, no microphone
-jarvis ask "open my downloads folder"
-```
-
-Inspection and diagnostic commands:
-
-```bash
-jarvis doctor                   # check keys, mic, wake word, TTS - start here
-jarvis mic                      # record 4s and show input levels in dBFS
-jarvis tools                    # every tool, with its risk level
-jarvis models                   # models your API key can actually reach
-jarvis devices                  # list microphones
-jarvis voices                   # list the free Edge neural voices
-jarvis config init              # write ~/.openjarvis/config.yaml to edit
-```
-
-In voice mode, after each reply Jarvis keeps listening for **8 seconds without the wake
-word**, so follow-ups work naturally. Say "stop" to put it back to sleep.
-
-### If the wake word never fires
-
-Nine times out of ten the selected input device is not your actual microphone — Windows
-often defaults to "Microsoft Sound Mapper", which can be mapped to nothing. Run
-`jarvis mic`. It prints a live level meter:
-
-- **`-inf dB` / "no signal at all"** — the device is muted, disconnected, or blocked by
-  Windows microphone privacy settings. Run `jarvis devices`, find your real mic, and set
-  `speech.input_device` to its index.
-- **peak around `-70 dB`** — the mic is live but heard no speech. Talk during the test.
-- **peak above `-35 dB`** — healthy; speech will be detected.
-
-### On model choice
-
-The default on Groq is `openai/gpt-oss-120b` rather than the larger `llama-3.3-70b`,
-because **tool-calling reliability matters more here than reasoning ability**. Llama
-models on Groq intermittently emit their tool calls as plain text, which Groq's validator
-rejects with `tool_use_failed` — an agent that can't reliably call a function is useless
-no matter how clever it is. OpenJarvis retries those automatically, then tells you to
-switch models if they persist.
-
----
-
-## Safety
-
-An LLM with shell access to your home directory is a genuinely bad idea unless something
-independent of the model decides what it is allowed to do. In OpenJarvis that decision is
-made by the safety policy, not by the prompt — a jailbroken model still cannot delete your
-Documents folder without you pressing `y`.
+### Safety
 
 Every tool declares a risk tier:
 
@@ -188,19 +181,18 @@ Every tool declares a risk tier:
 | `caution` | Reversible change — mkdir, rename, launch | Runs, printed to the console |
 | `dangerous` | Destroys or executes — delete, overwrite | **Asks you first**, by voice or keyboard |
 
-On top of that:
+Additional protections include:
 
-- **Deletes go to the Recycle Bin**, not to `unlink()`, unless you explicitly say permanent.
-- **System paths are hard-blocked.** `C:\Windows`, `Program Files`, drive roots — refused
-  before the tool ever runs, regardless of what the model asked for.
-- **Optional allow-list.** Set `safety.allowed_roots` and file writes are confined to those
-  folders and nothing else.
-- **`--dry-run`** declines every confirmation, so you can watch a plan without it executing.
+- Deletes go to the Recycle Bin unless permanent deletion is explicitly requested.
+- System paths such as `C:\Windows`, Program Files, and drive roots are blocked.
+- `safety.allowed_roots` can confine file writes to selected folders.
+- `--dry-run` declines every confirmation so you can inspect a plan without executing it.
+
+For example:
 
 ```yaml
-# ~/.openjarvis/config.yaml
 safety:
-  mode: tiered              # tiered | strict (confirm everything) | auto (confirm nothing)
+  mode: tiered
   allowed_roots:
     - ~/Documents
     - ~/Projects
@@ -208,44 +200,36 @@ safety:
   protect_system_paths: true
 ```
 
----
+## Example Voice Commands
 
-## Configuration
+Use the current activation phrase:
 
-`jarvis config init` writes a commented file to `~/.openjarvis/config.yaml`. The layers,
-lowest priority to highest: **defaults → config.yaml → environment / `.env` → CLI flags.**
-API keys only ever come from the environment, so the YAML file is safe to commit or paste.
+- "Hey Jarvis, open Spotify."
+- "Hey Jarvis, play some music."
+- "Hey Jarvis, open YouTube."
+- "Hey Jarvis, open my camera."
+- "Hey Jarvis, find my latest PDF."
+- "Hey Jarvis, what do I have open?"
 
-```yaml
-llm:
-  provider: groq              # groq | openai
-  model: openai/gpt-oss-120b
-  max_steps: 12               # ceiling on tool-call rounds per request
+Commands depend on installed applications, provider availability, and the configured safety
+policy. After a response, voice mode listens for follow-up commands for eight seconds without
+requiring the wake phrase. Say "stop" to stop listening.
 
-speech:
-  wake_word: hey_jarvis       # or alexa, hey_mycroft, or a path to your own .onnx
-  wake_threshold: 0.5         # raise if it fires at the TV, lower if it ignores you
-  input_device: null          # index from `jarvis devices`; null = system default
-  stt_provider: groq
-  tts_engine: edge            # edge (free neural) | system (offline) | openai | groq
-  tts_voice: en-US-AndrewNeural
-  silence_ms: 900             # how long a pause means "I'm done talking"
-  vad_sensitivity: 2.5        # lower if quiet speech gets cut off
-  followup_window_s: 8.0
+## Roadmap
 
-tools:
-  app_aliases:
-    music: spotify            # now "open music" launches Spotify
-  search_roots:
-    - D:/work
-```
+Planned work, not current functionality:
 
----
+- Train and evaluate a compatible **HelloSienna** wake-word model.
+- Improve handling of provider rate limits and usage constraints.
+- Add browser automation and screenshot/vision capabilities.
+- Add interruptible speech output.
+- Explore local LLM support and bring other platform adapters closer to Windows parity.
+- Add terminal and Git tools behind the dangerous safety tier.
 
 ## Adding a tool
 
-Tools are a pydantic model plus a `run` method. The docstrings you write are literally
-what the model reads when deciding whether to call it.
+Tools are a Pydantic model plus a `run` method. Their docstrings describe the tool to the
+model when it decides whether to call it.
 
 ```python
 from pydantic import BaseModel, Field
@@ -267,32 +251,14 @@ class SetVolume(Tool[SetVolumeArgs]):
         return ToolResult.success(f"Volume set to {args.level} percent.")
 ```
 
-Register it in `tools/registry.py` and it is live — schema generation, argument
-validation, safety tiering, and error handling are all inherited.
-
-Two things worth knowing:
-
-- **Descriptions are prompt engineering.** Say when to prefer this tool over a similar
-  one. Most "the model called the wrong tool" bugs are description bugs.
-- **Return errors, don't raise them,** where the model could recover. `ToolResult.failure`
-  goes back into the conversation so it can try something else; an exception ends the turn.
-
----
-
-## Roadmap
-
-- [ ] Terminal + git tools (shell execution behind the `dangerous` tier)
-- [ ] Playwright browser automation — click, fill, extract
-- [ ] Screenshot + vision, so "what's on my screen" works
-- [ ] Barge-in: interrupt Jarvis mid-sentence
-- [ ] Local models via Ollama, for a fully offline assistant
-- [ ] macOS and Linux adapters brought up to parity with Windows
-
----
+Register the tool in `tools/registry.py` to inherit schema generation, argument validation,
+safety tiering, and error handling. Tool descriptions should explain when to choose a tool.
+Return `ToolResult.failure` for recoverable tool errors so the model can see and respond to
+them.
 
 ## Contributing
 
-Issues and PRs welcome. The interfaces worth reading first:
+Issues and pull requests are welcome. Useful interfaces to start with:
 
 | File | What it defines |
 |---|---|
@@ -307,8 +273,6 @@ pip install -e ".[dev,voice]"
 pytest
 ruff check src tests
 ```
-
----
 
 ## License
 

@@ -72,6 +72,7 @@ class LLMConfig(BaseModel):
     model: str | None = None
     temperature: float = 0.2
     max_tokens: int = 1024
+    rate_limit_max_wait_s: float = Field(default=8.0, ge=0, le=30)
     # Hard ceiling on tool-call rounds per request, so a confused model cannot loop forever.
     max_steps: int = 12
     # Conversation turns retained between requests (the system prompt is always kept).
@@ -204,6 +205,7 @@ class Settings(BaseModel):
             ("OPENJARVIS_LLM_PROVIDER", self.llm, "provider", str),
             ("OPENJARVIS_LLM_MODEL", self.llm, "model", str),
             ("OPENJARVIS_LLM_TEMPERATURE", self.llm, "temperature", float),
+            ("OPENJARVIS_RATE_LIMIT_MAX_WAIT_S", self.llm, "rate_limit_max_wait_s", float),
             ("OPENJARVIS_MAX_STEPS", self.llm, "max_steps", int),
             ("OPENJARVIS_STT_PROVIDER", self.speech, "stt_provider", str),
             ("OPENJARVIS_STT_MODEL", self.speech, "stt_model", str),
@@ -217,7 +219,12 @@ class Settings(BaseModel):
             if value is None or value == "":
                 continue
             try:
-                setattr(target, field, caster(value))
+                parsed = caster(value)
+                if field == "rate_limit_max_wait_s" and not 0 <= parsed <= 30:
+                    raise ConfigError(
+                        f"{env_key}={value!r} must be between 0 and 30 seconds."
+                    )
+                setattr(target, field, parsed)
             except (TypeError, ValueError) as exc:
                 raise ConfigError(f"{env_key}={value!r} is not a valid {caster.__name__}.") from exc
 

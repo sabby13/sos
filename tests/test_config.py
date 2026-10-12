@@ -75,6 +75,24 @@ def test_bad_environment_value_gives_a_clear_error(tmp_path, monkeypatch):
         Settings.load(tmp_path / "none.yaml")
 
 
+def test_rate_limit_retry_wait_is_configurable(tmp_path, monkeypatch):
+    path = write_config(tmp_path, "llm:\n  rate_limit_max_wait_s: 5\n")
+    assert Settings.load(path).llm.rate_limit_max_wait_s == 5
+
+    monkeypatch.setenv("OPENJARVIS_RATE_LIMIT_MAX_WAIT_S", "3")
+    assert Settings.load(path).llm.rate_limit_max_wait_s == 3
+
+
+def test_rate_limit_retry_wait_rejects_out_of_range_values(tmp_path, monkeypatch):
+    path = write_config(tmp_path, "llm:\n  rate_limit_max_wait_s: 31\n")
+    with pytest.raises(ValueError):
+        Settings.load(path)
+
+    monkeypatch.setenv("OPENJARVIS_RATE_LIMIT_MAX_WAIT_S", "31")
+    with pytest.raises(ConfigError, match="between 0 and 30 seconds"):
+        Settings.load(tmp_path / "none.yaml")
+
+
 def test_missing_api_key_names_the_variable(tmp_path, monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     cfg = Settings.load(tmp_path / "none.yaml")
