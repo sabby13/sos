@@ -37,6 +37,7 @@ licensed open-source project. This proof of concept is maintained at
 - Browser opening and web search.
 - Text-to-speech with Edge neural voices and an offline system-voice fallback.
 - Safety checks for desktop and file actions.
+- Bounded Groq rate-limit retries and privacy-conscious provider usage diagnostics.
 
 Application launching uses installed-app discovery and aliases. Spotify, YouTube, and the
 Windows Camera app depend on the app or browser being installed and available on the computer.
@@ -228,7 +229,6 @@ requiring the wake phrase. Say "stop" to stop listening.
 Planned work, not current functionality:
 
 - Train and evaluate a compatible **HelloSienna** wake-word model.
-- Improve handling of provider rate limits and usage constraints.
 - Add browser automation and screenshot/vision capabilities.
 - Add interruptible speech output.
 - Explore local LLM support and bring other platform adapters closer to Windows parity.
