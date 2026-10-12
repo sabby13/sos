@@ -51,7 +51,7 @@ DEFAULT_TTS_MODELS: dict[str, str] = {
 }
 # Voice identifiers are engine-specific, so each engine gets its own default.
 DEFAULT_TTS_VOICES: dict[str, str] = {
-    "edge": "en-US-AndrewNeural",
+    "edge": "en-GB-SoniaNeural",
     "system": "",  # empty = whatever the OS has configured
     "openai": "alloy",
     "groq": "Fritz-PlayAI",
@@ -210,6 +210,7 @@ class Settings(BaseModel):
             ("OPENJARVIS_STT_PROVIDER", self.speech, "stt_provider", str),
             ("OPENJARVIS_STT_MODEL", self.speech, "stt_model", str),
             ("OPENJARVIS_TTS_PROVIDER", self.speech, "tts_engine", str),
+            ("OPENJARVIS_TTS_VOICE", self.speech, "tts_voice", str),
             ("OPENJARVIS_WAKE_WORD", self.speech, "wake_word", str),
             ("OPENJARVIS_SAFETY_MODE", self.safety, "mode", str),
             ("OPENJARVIS_LOG_LEVEL", self, "log_level", str),

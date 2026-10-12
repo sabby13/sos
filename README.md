@@ -134,7 +134,9 @@ speech:
   input_device: null
   stt_provider: groq
   tts_engine: edge
-  tts_voice: en-US-AndrewNeural
+  tts_voice: en-GB-SoniaNeural
+  tts_rate_pct: 0
+  tts_fallback: system
   silence_ms: 900
   vad_sensitivity: 2.5
   followup_window_s: 8.0
@@ -143,6 +145,12 @@ tools:
   app_aliases:
     music: spotify
 ```
+
+For this prototype, the Edge TTS voice is **Sonia** (`en-GB-SoniaNeural`), with the
+default natural speaking rate. Override `speech.tts_voice` in YAML or set
+`OPENJARVIS_TTS_VOICE` in `.env`. The configured voice applies to the selected TTS engine;
+the existing offline system-voice fallback remains enabled. Check availability with
+`jarvis.bat voices --prefix en-GB`; Edge TTS catalog availability may change.
 
 The existing wake-word setting accepts supported built-in model names or a path to a
 compatible custom ONNX model. Setting it to `HelloSienna` alone does not create or train a

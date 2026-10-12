@@ -21,6 +21,7 @@ def test_defaults_are_usable_with_no_config_file(tmp_path):
     assert cfg.llm.provider == "groq"
     assert cfg.llm.resolved_model() == DEFAULT_LLM_MODELS["groq"]
     assert cfg.speech.tts_engine == "edge"
+    assert cfg.speech.resolved_tts_voice() == "en-GB-SoniaNeural"
     assert cfg.speech.wake_word == "hey_jarvis"
 
 
@@ -128,6 +129,21 @@ def test_voice_defaults_are_per_engine():
     assert cfg.speech.resolved_tts_voice() == "en-GB-RyanNeural"
     assert cfg.speech.resolved_tts_voice("system") == DEFAULT_TTS_VOICES["system"]
     assert cfg.speech.resolved_tts_voice("openai") == "alloy"
+
+
+def test_tts_voice_can_be_configured_in_yaml_and_environment(tmp_path, monkeypatch):
+    path = write_config(tmp_path, "speech:\n  tts_voice: en-GB-RyanNeural\n")
+    assert Settings.load(path).speech.resolved_tts_voice() == "en-GB-RyanNeural"
+
+    monkeypatch.setenv("OPENJARVIS_TTS_VOICE", "en-GB-SoniaNeural")
+    assert Settings.load(path).speech.resolved_tts_voice() == "en-GB-SoniaNeural"
+
+
+def test_edge_voice_and_natural_rate_defaults():
+    cfg = Settings()
+    assert cfg.speech.resolved_tts_voice("edge") == "en-GB-SoniaNeural"
+    assert cfg.speech.tts_rate_pct == 0
+    assert cfg.speech.tts_fallback == "system"
 
 
 # ------------------------------------------------------------- transcript hygiene
