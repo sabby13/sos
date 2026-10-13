@@ -1,0 +1,19 @@
+html, body, #root {
+  margin: 0;
+  width: 100%;
+  min-height: 100vh;
+  background: transparent;
+}
+
+body {
+  font-family: 'Segoe UI', sans-serif;
+  color: #f1e8a5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button, textarea {
+  font: inherit;
+}
