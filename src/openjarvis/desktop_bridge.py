@@ -11,7 +11,10 @@ from collections.abc import Callable
 from typing import Any, TextIO
 
 from .config import API_KEY_ENV, Settings
+from .console import get_logger
 from .errors import JarvisError, SpeechError
+
+log = get_logger("desktop")
 
 
 class DesktopBridge:
@@ -239,6 +242,7 @@ class DesktopBridge:
             )
             self.emit("state", state="error")
         except Exception as exc:
+            log.exception("unexpected error handling desktop request %s", request_id)
             self.emit("error", requestId=request_id, message=str(exc))
             self.emit("state", state="error")
         finally:
