@@ -42,7 +42,7 @@ actions show the OpenJarvis safety preview and require explicit approval.
 ## Settings and controls
 
 - Click the avatar or brand to expand/collapse the chat.
-- Drag the avatar/header to move the window; its compact position is persisted.
+- Drag the avatar's outer edge or header to move the window; its position is persisted.
 - The gear panel controls always-on-top, click-through, sign-in startup, and speech.
 - `Ctrl+Alt+H` or the tray menu turns click-through off again if the window stops
   accepting mouse input.

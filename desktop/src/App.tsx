@@ -93,9 +93,11 @@ function App() {
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences)
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null)
   const [toolActivity, setToolActivity] = useState('')
+  const [avatarEdgeHovered, setAvatarEdgeHovered] = useState(false)
+  const [avatarEdgeDragging, setAvatarEdgeDragging] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const messagesRef = useRef<HTMLDivElement | null>(null)
-  const dragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null)
+  const dragRef = useRef<{ x: number; y: number; moved: boolean; source: 'header' | 'avatar-edge' } | null>(null)
   const suppressAvatarClickRef = useRef(false)
 
   const addMessage = useCallback((role: Message['role'], text: string, id: string = crypto.randomUUID()) => {
@@ -200,6 +202,7 @@ function App() {
   const changeExpanded = (value: boolean) => {
     setExpanded(value)
     setSettingsOpen(false)
+    setAvatarEdgeHovered(false)
     void window.helloSienna.setExpanded(value)
   }
 
@@ -234,26 +237,54 @@ function App() {
 
   const handleDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || (event.target instanceof Element && event.target.closest('button'))) return
-    dragRef.current = { x: event.screenX, y: event.screenY, moved: false }
+    dragRef.current = { x: event.screenX, y: event.screenY, moved: false, source: 'header' }
     event.currentTarget.setPointerCapture(event.pointerId)
     window.helloSienna.beginDrag(event.screenX, event.screenY)
   }
 
-  const handleDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handleDragEnd = () => {
     const drag = dragRef.current
     if (!drag) return
-    if (Math.abs(event.screenX - drag.x) + Math.abs(event.screenY - drag.y) > 4) drag.moved = true
-    if (drag.moved) window.helloSienna.dragTo(event.screenX, event.screenY)
-  }
-
-  const handleDragEnd = () => {
-    if (!dragRef.current) return
-    suppressAvatarClickRef.current = dragRef.current.moved
+    suppressAvatarClickRef.current = drag.moved || drag.source === 'avatar-edge'
+    if (drag.source === 'avatar-edge') setAvatarEdgeDragging(false)
     window.helloSienna.endDrag()
     dragRef.current = null
     window.setTimeout(() => {
       suppressAvatarClickRef.current = false
     }, 0)
+  }
+
+  const handleDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (!drag) return
+    if ((event.buttons & 1) === 0) {
+      handleDragEnd()
+      return
+    }
+    if (Math.abs(event.screenX - drag.x) + Math.abs(event.screenY - drag.y) > 4) drag.moved = true
+    if (drag.moved) window.helloSienna.dragTo(event.screenX, event.screenY)
+  }
+
+  const isNearAvatarEdge = (element: HTMLButtonElement, clientX: number, clientY: number) => {
+    const bounds = element.getBoundingClientRect()
+    const radius = Math.min(bounds.width, bounds.height) / 2
+    const distance = Math.hypot(clientX - (bounds.left + bounds.width / 2), clientY - (bounds.top + bounds.height / 2))
+    return Math.abs(distance - radius) <= 10
+  }
+
+  const handleAvatarPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    setAvatarEdgeHovered(!expanded && isNearAvatarEdge(event.currentTarget, event.clientX, event.clientY))
+  }
+
+  const handleAvatarPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || expanded || !isNearAvatarEdge(event.currentTarget, event.clientX, event.clientY)) return
+    event.preventDefault()
+    event.stopPropagation()
+    dragRef.current = { x: event.screenX, y: event.screenY, moved: false, source: 'avatar-edge' }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setAvatarEdgeHovered(true)
+    setAvatarEdgeDragging(true)
+    window.helloSienna.beginDrag(event.screenX, event.screenY)
   }
 
   const handleAvatarClick = () => {
@@ -288,7 +319,13 @@ function App() {
         >
           <button
             type="button"
-            className="avatar-wrap"
+            className={`avatar-wrap${avatarEdgeHovered ? ' edge-hovered' : ''}${avatarEdgeDragging ? ' edge-dragging' : ''}`}
+            onPointerMove={handleAvatarPointerMove}
+            onPointerDown={handleAvatarPointerDown}
+            onPointerUp={handleDragEnd}
+            onPointerCancel={handleDragEnd}
+            onLostPointerCapture={handleDragEnd}
+            onPointerLeave={() => setAvatarEdgeHovered(false)}
             onClick={handleAvatarClick}
             aria-label={expanded ? 'Collapse HelloSienna' : 'Expand HelloSienna'}
           >

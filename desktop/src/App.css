@@ -119,6 +119,30 @@ button {
   -webkit-app-region: no-drag;
 }
 
+.avatar-wrap::before {
+  position: absolute;
+  inset: 0;
+  border: 2px solid #f4d64e;
+  border-radius: 50%;
+  box-shadow: 0 0 5px rgba(244, 214, 78, 0.42);
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.avatar-wrap.edge-hovered {
+  cursor: grab;
+}
+
+.avatar-wrap.edge-hovered::before {
+  opacity: 1;
+}
+
+.avatar-wrap.edge-dragging {
+  cursor: grabbing;
+}
+
 .expanded .avatar-wrap {
   width: 68px;
   height: 68px;
