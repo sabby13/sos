@@ -32,6 +32,9 @@ class DesktopBridge:
         self._microphone = None
         self._voice_lock = threading.Lock()
         self._stopping = threading.Event()
+        self._turn_cancel = threading.Event()
+        self._active_request_id: str | None = None
+        self._active_lock = threading.Lock()
 
     def emit(self, event_type: str, **fields: Any) -> None:
         message = {"type": event_type, **fields}
@@ -58,6 +61,9 @@ class DesktopBridge:
             if request_type == "shutdown":
                 self.shutdown()
                 return
+            if request_type == "cancel":
+                self._cancel_turn(request.get("requestId"))
+                continue
             if request_type == "get-settings":
                 self.emit(
                     "settings",
@@ -93,6 +99,9 @@ class DesktopBridge:
                     message="Sienna is already handling a request.",
                 )
                 continue
+            self._turn_cancel.clear()
+            with self._active_lock:
+                self._active_request_id = request_id
             worker = threading.Thread(
                 target=self._handle_turn,
                 args=(request_type, request_id, request.get("text", "")),
@@ -114,6 +123,21 @@ class DesktopBridge:
             for event, answer in self._confirmations.values():
                 answer[:] = [False]
                 event.set()
+
+    def _cancel_turn(self, request_id: Any) -> None:
+        with self._active_lock:
+            if not isinstance(request_id, str) or request_id != self._active_request_id:
+                self.emit(
+                    "cancel-error",
+                    requestId=request_id if isinstance(request_id, str) else None,
+                    message="That request is no longer active.",
+                )
+                return
+            self._turn_cancel.set()
+
+        if self._speaker is not None:
+            self._speaker.stop()
+        self.emit("state", state="cancelling", requestId=request_id)
 
     def _public_settings(self) -> dict[str, Any]:
         provider = self.settings.llm.provider
@@ -168,7 +192,10 @@ class DesktopBridge:
             detail=detail,
         )
         try:
-            return event.wait(timeout=180) and answer[0] and not self._stopping.is_set()
+            while not event.wait(timeout=0.1):
+                if self._stopping.is_set() or self._turn_cancel.is_set():
+                    return False
+            return answer[0] and not self._stopping.is_set() and not self._turn_cancel.is_set()
         finally:
             with self._confirmation_lock:
                 self._confirmations.pop(confirmation_id, None)
@@ -212,7 +239,11 @@ class DesktopBridge:
         return self._speaker
 
     def _speak(self, text: str) -> None:
+        if self._turn_cancel.is_set():
+            return
         speaker = self._get_speaker()
+        if self._turn_cancel.is_set():
+            return
         self.emit("state", state="speaking")
         try:
             speaker.speak(text, block=True)
@@ -220,32 +251,59 @@ class DesktopBridge:
             self.emit("speech-error", message=exc.message)
 
     def _handle_turn(self, request_type: str, request_id: str, text: str) -> None:
+        final_state = "idle"
         try:
             if request_type == "voice":
                 text = self._capture_voice()
+                if self._turn_cancel.is_set():
+                    return
                 if not text:
                     self.emit("error", requestId=request_id, message="No speech was detected.")
+                    final_state = "error"
                     return
                 self.emit("transcript", requestId=request_id, text=text)
+            if self._turn_cancel.is_set():
+                return
             self.emit("state", state="processing")
-            response = self._get_agent().ask(text)
+            response = self._get_agent().ask(text, cancel_event=self._turn_cancel)
+            if self._turn_cancel.is_set():
+                return
             self.emit("reply", requestId=request_id, text=response)
             if request_type == "voice" and self.settings.speech.tts_engine != "none":
                 self._speak(response)
-            self.emit("state", state="idle")
         except JarvisError as exc:
+            if self._turn_cancel.is_set():
+                return
             self.emit(
                 "error",
                 requestId=request_id,
                 message=exc.message,
                 hint=exc.hint,
             )
-            self.emit("state", state="error")
+            final_state = "error"
         except Exception as exc:
+            if self._turn_cancel.is_set():
+                return
             log.exception("unexpected error handling desktop request %s", request_id)
             self.emit("error", requestId=request_id, message=str(exc))
-            self.emit("state", state="error")
+            final_state = "error"
         finally:
+            cancelled = self._turn_cancel.is_set()
+            with self._active_lock:
+                self._active_request_id = None
+            if cancelled:
+                self.emit(
+                    "cancelled",
+                    requestId=request_id,
+                    message=(
+                        "Cancellation was acknowledged. An in-flight provider call or desktop "
+                        "action may have finished before it could stop; completed actions "
+                        "cannot be undone."
+                    ),
+                )
+                self.emit("state", state="idle", requestId=request_id)
+            else:
+                self.emit("state", state=final_state, requestId=request_id)
             self._turn_lock.release()
 
     def _capture_voice(self) -> str:
@@ -260,6 +318,8 @@ class DesktopBridge:
         with self._voice_lock:
             self._microphone = microphone
         try:
+            if self._turn_cancel.is_set():
+                return ""
             with microphone:
                 utterance = record_utterance(
                     microphone,
@@ -268,14 +328,18 @@ class DesktopBridge:
                     max_seconds=self.settings.speech.max_utterance_s,
                     sensitivity=self.settings.speech.vad_sensitivity,
                     start_timeout_s=15,
+                    cancel_event=self._turn_cancel,
                 )
+            if self._turn_cancel.is_set():
+                return ""
             if utterance is None:
                 return ""
             self.emit("state", state="transcribing")
             transcriber = Transcriber(self.settings)
-            return transcriber.transcribe(
+            transcript = transcriber.transcribe(
                 utterance.to_wav(self.settings.speech.sample_rate)
             )
+            return "" if self._turn_cancel.is_set() else transcript
         finally:
             with self._voice_lock:
                 self._microphone = None

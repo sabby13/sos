@@ -41,9 +41,18 @@ actions show the OpenJarvis safety preview and require explicit approval.
 
 ## Settings and controls
 
-- Click the avatar or brand to expand/collapse the chat.
-- Drag the avatar's outer edge or header to move the window; its position is persisted.
-- The gear panel controls always-on-top, click-through, sign-in startup, and speech.
+- Click Sienna's portrait to unfold the horizontal voice pill. The `helloSienna`
+  dot-matrix label appears after the pill finishes expanding; click it to start voice
+  capture. The microphone appears and pulses only while the backend is listening.
+- Click the pill's X to collapse while idle, or to cooperatively cancel the current
+  request while it is active. In-flight provider calls and desktop actions may finish
+  before cancellation is observed; already completed actions cannot be undone.
+- Drag the avatar's outer edge while compact, or the pill header while expanded, to
+  move the native Electron window. Its avatar position is persisted across restarts.
+- Right-click the pill label or press `Ctrl+Shift+C` to open the chat and message history.
+  Press `Ctrl+,` to open settings; the gear panel controls always-on-top, click-through,
+  sign-in startup, and speech. `Escape` cancels active work, then closes settings/chat,
+  or collapses the idle pill.
 - `Ctrl+Alt+H` or the tray menu turns click-through off again if the window stops
   accepting mouse input.
 - The tray menu can show the app, change click-through, restart the Python bridge,

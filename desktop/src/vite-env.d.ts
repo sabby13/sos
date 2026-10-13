@@ -1,7 +1,8 @@
 type DesktopRequest = {
   id: string
-  type: 'ask' | 'voice' | 'get-settings' | 'configure' | 'confirmation'
+  type: 'ask' | 'voice' | 'get-settings' | 'configure' | 'confirmation' | 'cancel'
   text?: string
+  requestId?: string
   settings?: { ttsEngine?: 'edge' | 'system' | 'none' }
   confirmationId?: string
   approved?: boolean
@@ -19,6 +20,8 @@ declare global {
   type HelloSiennaEvent = {
     type: string
     requestId?: string
+    direction?: 'left' | 'right'
+    width?: number
     state?: string
     text?: string
     message?: string
@@ -47,7 +50,9 @@ declare global {
       onEvent: (callback: (message: HelloSiennaEvent) => void) => () => void
       getPreferences: () => Promise<DesktopPreferences>
       setPreferences: (preferences: Partial<DesktopPreferences>) => Promise<DesktopPreferences>
-      setExpanded: (expanded: boolean) => Promise<void>
+      getPillLayout: () => Promise<{ direction: 'left' | 'right'; width: number }>
+      setExpanded: (expanded: boolean) => Promise<{ direction: 'left' | 'right'; width: number } | null>
+      setChatVisible: (visible: boolean) => Promise<void>
       toggleWindow: () => Promise<void>
       closeApp: () => Promise<void>
       beginDrag: (screenX: number, screenY: number) => void

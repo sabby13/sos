@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Event
 
 from ..config import Settings
 from ..console import get_logger
@@ -29,6 +30,10 @@ from ..tools.registry import ToolRegistry, default_registry
 from .prompts import build_system_prompt
 
 log = get_logger("agent")
+
+
+class TurnCancelled(Exception):
+    """Raised when a desktop turn is cooperatively cancelled."""
 
 
 @dataclass
@@ -79,53 +84,69 @@ class Agent:
 
     # ------------------------------------------------------------------ turn
 
-    def ask(self, user_text: str) -> str:
+    def ask(self, user_text: str, *, cancel_event: Event | None = None) -> str:
         """Run one user request to completion and return what to say back."""
         started = time.monotonic()
         stats = TurnStats()
+        history_start = len(self._history)
         self._history.append(Message.user(user_text))
 
-        schemas = self.registry.schemas()
-        reply = ""
+        def check_cancelled() -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise TurnCancelled()
 
-        for step in range(1, self.settings.llm.max_steps + 1):
-            stats.steps = step
-            self.events.fire("on_thinking")
+        try:
+            schemas = self.registry.schemas()
+            reply = ""
 
-            completion = self.provider.complete([self._system, *self._history], schemas)
-            stats.prompt_tokens += completion.prompt_tokens
-            stats.completion_tokens += completion.completion_tokens
-            if completion.prompt_tokens or completion.completion_tokens:
-                log.debug(
-                    "provider usage: prompt_tokens=%d completion_tokens=%d",
-                    completion.prompt_tokens,
-                    completion.completion_tokens,
+            for step in range(1, self.settings.llm.max_steps + 1):
+                check_cancelled()
+                stats.steps = step
+                self.events.fire("on_thinking")
+
+                completion = self.provider.complete([self._system, *self._history], schemas)
+                check_cancelled()
+                stats.prompt_tokens += completion.prompt_tokens
+                stats.completion_tokens += completion.completion_tokens
+                if completion.prompt_tokens or completion.completion_tokens:
+                    log.debug(
+                        "provider usage: prompt_tokens=%d completion_tokens=%d",
+                        completion.prompt_tokens,
+                        completion.completion_tokens,
+                    )
+                self._history.append(completion.message)
+
+                if not completion.wants_tools:
+                    reply = (completion.message.content or "").strip()
+                    break
+
+                stats.tool_calls += len(completion.message.tool_calls)
+                early_reply = self._run_tool_calls(completion, check_cancelled)
+                check_cancelled()
+                if early_reply is not None:
+                    reply = early_reply
+                    break
+            else:
+                # Ran out of steps without the model settling on an answer.
+                reply = (
+                    "I got stuck working on that - I tried several steps without finishing. "
+                    "Could you break it into smaller pieces?"
                 )
-            self._history.append(completion.message)
+                log.warning("hit max_steps=%d without a final answer", self.settings.llm.max_steps)
 
-            if not completion.wants_tools:
-                reply = (completion.message.content or "").strip()
-                break
+            stats.seconds = time.monotonic() - started
+            self.last_stats = stats
+            self._trim_history()
+            return reply or "Done."
+        except TurnCancelled:
+            del self._history[history_start:]
+            raise
 
-            stats.tool_calls += len(completion.message.tool_calls)
-            early_reply = self._run_tool_calls(completion)
-            if early_reply is not None:
-                reply = early_reply
-                break
-        else:
-            # Ran out of steps without the model settling on an answer.
-            reply = (
-                "I got stuck working on that - I tried several steps without finishing. "
-                "Could you break it into smaller pieces?"
-            )
-            log.warning("hit max_steps=%d without a final answer", self.settings.llm.max_steps)
-
-        stats.seconds = time.monotonic() - started
-        self.last_stats = stats
-        self._trim_history()
-        return reply or "Done."
-
-    def _run_tool_calls(self, completion: Completion) -> str | None:
+    def _run_tool_calls(
+        self,
+        completion: Completion,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> str | None:
         """Execute every tool the model asked for.
 
         Returns the reply to end the turn with, or None to let the loop continue. Every
@@ -134,9 +155,13 @@ class Agent:
         """
         early_reply: str | None = None
         for call in completion.message.tool_calls:
+            if check_cancelled is not None:
+                check_cancelled()
             result = self._run_one(call)
             self._history.append(Message.tool(call.id, call.name, result.to_model_content()))
             self.events.fire("on_tool_result", call.name, result)
+            if check_cancelled is not None:
+                check_cancelled()
             if result.terminal and early_reply is None:
                 # The tool's summary is written for the model; say something human instead.
                 early_reply = "Okay, I've left that alone." if not result.ok else result.summary

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+from threading import Event
 
 from conftest import FakeProvider, text_completion, tool_completion
-from openjarvis.agent.loop import Agent
+from openjarvis.agent.loop import Agent, TurnCancelled
 from openjarvis.errors import ProviderError
 from openjarvis.llm.base import Completion, Message
 from openjarvis.safety.confirm import AutoConfirmer, DenyConfirmer
@@ -32,6 +33,34 @@ def tool_messages(agent: Agent) -> list[dict]:
 def test_plain_answer_needs_no_tools(settings, platform, tmp_path):
     agent = build_agent(settings, platform, tmp_path, [text_completion("Hello.")])
     assert agent.ask("hi") == "Hello."
+
+
+def test_cancelled_agent_turn_discards_its_conversation(settings, platform, tmp_path):
+    cancellation = Event()
+
+    class CancellingProvider:
+        name = "fake"
+        model = "fake-model"
+
+        def complete(self, messages, tools=None):
+            cancellation.set()
+            return text_completion("This answer must not escape.")
+
+        def transcribe(self, audio, *, filename="speech.wav"):
+            return ""
+
+    agent = Agent(settings=settings, provider=CancellingProvider())
+    agent.ctx.platform = platform
+    agent.ctx.cwd = str(tmp_path)
+
+    try:
+        agent.ask("cancel this request", cancel_event=cancellation)
+    except TurnCancelled:
+        pass
+    else:
+        raise AssertionError("expected cooperative cancellation")
+
+    assert agent.history == []
 
 
 def test_tool_call_executes_then_the_model_summarises(settings, platform, tmp_path):

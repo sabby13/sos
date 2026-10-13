@@ -41,53 +41,46 @@ const defaultPreferences: Preferences = {
   windowBounds: null,
 }
 
-const activeStates = new Set(['listening', 'transcribing', 'processing', 'executing', 'speaking'])
-const dotGlyphs: Record<string, string[]> = {
-  H: ['10001', '10001', '10001', '11111', '10001', '10001', '10001'],
-  E: ['11111', '10000', '10000', '11110', '10000', '10000', '11111'],
-  L: ['10000', '10000', '10000', '10000', '10000', '10000', '11111'],
-  O: ['01110', '10001', '10001', '10001', '10001', '10001', '01110'],
-  S: ['01111', '10000', '10000', '01110', '00001', '00001', '11110'],
-  I: ['11111', '00100', '00100', '00100', '00100', '00100', '11111'],
-  N: ['10001', '11001', '11001', '10101', '10011', '10011', '10001'],
-  A: ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
-}
+const activeStates = new Set(['listening', 'transcribing', 'processing', 'executing', 'speaking', 'cancelling'])
+const AVATAR_SIZE = 97.65625
 
-function DotMatrixWord() {
-  const letters = 'HELLOSIENNA'.split('')
-  const width = letters.length * 6 - 1
+function MicrophoneGlyph({ available, recording }: { available: boolean; recording: boolean }) {
   return (
-    <svg className="dot-word" viewBox={`0 0 ${width} 7`} role="img" aria-label="HelloSienna">
-      {letters.flatMap((letter, letterIndex) =>
-        dotGlyphs[letter].flatMap((row, rowIndex) =>
-          [...row].flatMap((pixel, columnIndex) =>
-            pixel === '1'
-              ? [
-                  <circle
-                    key={`${letterIndex}-${rowIndex}-${columnIndex}`}
-                    cx={letterIndex * 6 + columnIndex + 0.5}
-                    cy={rowIndex + 0.5}
-                    r="0.36"
-                  />,
-                ]
-              : [],
-          ),
-        ),
-      )}
-    </svg>
+    <span className={`pill-microphone${recording ? ' recording' : ''}${available ? '' : ' font-fallback'}`}>
+      <span className="material-symbols-outlined sienna-microphone" aria-hidden="true">mic</span>
+      <svg className="sienna-microphone-fallback" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+      </svg>
+    </span>
   )
 }
 
+function DotMatrixWord({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="hello-sienna-text" type="button" onClick={onClick} aria-label="Activate HelloSienna voice">
+      {'helloSienna'.split('').map((character, index) => (
+        <span key={`${character}-${index}`} style={{ animationDelay: `${index * 38}ms` }}>{character}</span>
+      ))}
+    </button>
+  )
+}
 function timestamp() {
   return new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
 function App() {
   const [expanded, setExpanded] = useState(false)
+  const [pillReady, setPillReady] = useState(false)
+  const [pillDirection, setPillDirection] = useState<'left' | 'right'>('right')
+  const [pillWidth, setPillWidth] = useState(350)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [pillMessage, setPillMessage] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
+  const [voicePending, setVoicePending] = useState(false)
   const [state, setState] = useState('idle')
+  const [materialSymbolsAvailable, setMaterialSymbolsAvailable] = useState(false)
   const [backendReady, setBackendReady] = useState(false)
   const [backendSettings, setBackendSettings] = useState<BackendSettings | null>(null)
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences)
@@ -98,7 +91,24 @@ function App() {
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const messagesRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{ x: number; y: number; moved: boolean; source: 'header' | 'avatar-edge' } | null>(null)
-  const suppressAvatarClickRef = useRef(false)
+  const suppressAvatarClickRef = useRef(0)
+  const activeRequestIdRef = useRef<string | null>(null)
+  const busy = activeStates.has(state) || voicePending
+
+  useEffect(() => {
+    let mounted = true
+    void document.fonts
+      .load('28px "Material Symbols Outlined"', 'mic')
+      .then((fonts) => {
+        if (mounted) setMaterialSymbolsAvailable(fonts.length > 0)
+      })
+      .catch(() => {
+        if (mounted) setMaterialSymbolsAvailable(false)
+      })
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const addMessage = useCallback((role: Message['role'], text: string, id: string = crypto.randomUUID()) => {
     setMessages((current) => {
@@ -124,20 +134,48 @@ function App() {
           break
         case 'state':
           setState(event.state ?? 'idle')
-          if (event.state === 'idle') setToolActivity('')
+          if (event.state) setVoicePending(false)
+          if (event.state === 'idle') {
+            setToolActivity('')
+            setPillMessage('')
+            activeRequestIdRef.current = null
+          } else if (event.state === 'listening') {
+            setPillMessage('')
+          } else if (event.state === 'transcribing') {
+            setPillMessage('Transcribing speech…')
+          } else if (event.state === 'processing') {
+            setPillMessage((current) => current || 'Working on it…')
+          } else if (event.state === 'cancelling') {
+            setPillMessage('Cancelling…')
+          }
           break
         case 'transcript':
-          if (event.text) addMessage('user', event.text, event.requestId)
+          if (event.text) {
+            addMessage('user', event.text, event.requestId)
+            setPillMessage(event.text)
+          }
           break
         case 'reply':
-          if (event.text) addMessage('assistant', event.text, event.requestId ? `${event.requestId}-reply` : undefined)
+          if (event.text) {
+            addMessage('assistant', event.text, event.requestId ? `${event.requestId}-reply` : undefined)
+            setPillMessage(event.text)
+          }
           break
         case 'error':
+          setVoicePending(false)
           if (!event.requestId) setBackendReady(false)
           setState('error')
           if (event.message) {
+            setPillMessage(event.message)
             addMessage('assistant', `${event.message}${event.hint ? `\n${event.hint}` : ''}`, event.requestId ? `${event.requestId}-error` : undefined)
           }
+          break
+        case 'cancelled':
+          activeRequestIdRef.current = null
+          setVoicePending(false)
+          setConfirmation(null)
+          setToolActivity('')
+          setPillMessage('')
           break
         case 'speech-error':
           if (event.message) setToolActivity(event.message)
@@ -145,12 +183,15 @@ function App() {
         case 'tool':
           setState('executing')
           setToolActivity(event.preview || event.name || 'Working with a tool')
+          setPillMessage(event.preview || event.name || 'Working with a tool')
           break
         case 'tool-result':
           setToolActivity(`${event.ok ? 'Completed' : 'Could not complete'}: ${event.summary ?? event.name ?? 'tool action'}`)
+          setPillMessage(event.summary ?? event.name ?? 'Tool action complete')
           break
         case 'tool-blocked':
           setToolActivity(`Blocked by safety policy: ${event.reason ?? event.name ?? 'action'}`)
+          setPillMessage('Action blocked by safety policy')
           break
         case 'confirmation':
           if (event.confirmationId) {
@@ -179,32 +220,42 @@ function App() {
   }, [addMessage])
 
   useEffect(() => {
-    if (expanded && !settingsOpen) inputRef.current?.focus()
-  }, [expanded, settingsOpen])
+    if (chatOpen && !settingsOpen) inputRef.current?.focus()
+  }, [chatOpen, settingsOpen])
 
   useEffect(() => {
     if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight
   }, [messages])
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setConfirmation(null)
-        setSettingsOpen(false)
-        setExpanded(false)
-        void window.helloSienna.setExpanded(false)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
-
-  const changeExpanded = (value: boolean) => {
-    setExpanded(value)
-    setSettingsOpen(false)
+  const changeExpanded = useCallback(async (value: boolean) => {
+    setPillReady(false)
     setAvatarEdgeHovered(false)
-    void window.helloSienna.setExpanded(value)
-  }
+    if (value) {
+      const layout = await window.helloSienna.getPillLayout()
+      if (layout) {
+        setPillDirection(layout.direction)
+        setPillWidth(layout.width)
+      }
+      setExpanded(true)
+      await window.helloSienna.setExpanded(true)
+      return
+    }
+    if (chatOpen) await window.helloSienna.setChatVisible(false)
+    setExpanded(false)
+    setChatOpen(false)
+    setSettingsOpen(false)
+  }, [chatOpen])
+
+  const changeChatVisible = useCallback(async (visible: boolean) => {
+    if (visible && !expanded) await changeExpanded(true)
+    setChatOpen(visible)
+    if (!visible) setSettingsOpen(false)
+    await window.helloSienna.setChatVisible(visible)
+  }, [changeExpanded, expanded])
+
+  const toggleChat = useCallback(async () => {
+    await changeChatVisible(!chatOpen)
+  }, [changeChatVisible, chatOpen])
 
   const handleSend = () => {
     const text = input.trim()
@@ -213,16 +264,26 @@ function App() {
     addMessage('user', text, requestId)
     setInput('')
     setState('processing')
+    activeRequestIdRef.current = requestId
     window.helloSienna.send({ id: requestId, type: 'ask', text })
   }
 
   const handleVoice = () => {
-    if (activeStates.has(state)) return
+    if (activeStates.has(state) || voicePending || !backendReady) return
     const requestId = crypto.randomUUID()
-    setState('listening')
+    activeRequestIdRef.current = requestId
+    setVoicePending(true)
     setToolActivity('Listening through your selected microphone…')
     window.helloSienna.send({ id: requestId, type: 'voice' })
   }
+
+  const handleCancel = useCallback(() => {
+    const requestId = activeRequestIdRef.current
+    if (!requestId) return
+    setState('cancelling')
+    setPillMessage('Cancelling…')
+    window.helloSienna.send({ id: crypto.randomUUID(), type: 'cancel', requestId })
+  }, [])
 
   const handleConfirmation = (approved: boolean) => {
     if (!confirmation) return
@@ -245,13 +306,12 @@ function App() {
   const handleDragEnd = () => {
     const drag = dragRef.current
     if (!drag) return
-    suppressAvatarClickRef.current = drag.moved || drag.source === 'avatar-edge'
+    if (drag.moved || drag.source === 'avatar-edge') {
+      suppressAvatarClickRef.current = Date.now() + 350
+    }
     if (drag.source === 'avatar-edge') setAvatarEdgeDragging(false)
     window.helloSienna.endDrag()
     dragRef.current = null
-    window.setTimeout(() => {
-      suppressAvatarClickRef.current = false
-    }, 0)
   }
 
   const handleDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -288,15 +348,24 @@ function App() {
   }
 
   const handleAvatarClick = () => {
-    if (suppressAvatarClickRef.current) return
+    if (Date.now() < suppressAvatarClickRef.current) return
     changeExpanded(!expanded)
+  }
+
+  const handlePillTransitionEnd = (event: React.TransitionEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget || event.propertyName !== 'width') return
+    if (expanded) {
+      setPillReady(true)
+    } else {
+      setPillDirection('right')
+      void window.helloSienna.setExpanded(false)
+    }
   }
 
   const updatePreference = async (patch: Partial<Preferences>) => {
     await syncPreferences(patch)
   }
 
-  const busy = activeStates.has(state)
   const statusLabel: Record<string, string> = {
     idle: backendReady ? 'ready' : 'connecting to OpenJarvis…',
     listening: 'listening',
@@ -307,11 +376,50 @@ function App() {
     error: 'backend error',
   }
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setConfirmation(null)
+        if (busy) {
+          handleCancel()
+        } else if (settingsOpen) {
+          setSettingsOpen(false)
+        } else if (chatOpen) {
+          void changeChatVisible(false)
+        } else if (expanded) {
+          changeExpanded(false)
+        }
+      } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'c') {
+        event.preventDefault()
+        void toggleChat()
+      } else if (event.ctrlKey && event.key === ',') {
+        event.preventDefault()
+        void (async () => {
+          if (!expanded) await changeExpanded(true)
+          setChatOpen(true)
+          setSettingsOpen(true)
+          await window.helloSienna.setChatVisible(true)
+        })()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [busy, chatOpen, changeChatVisible, changeExpanded, expanded, handleCancel, settingsOpen, toggleChat])
+
   return (
     <main className="desktop-shell">
-      <section className={`floating-widget ${expanded ? 'expanded' : ''}`} aria-label="HelloSienna assistant">
+      <section
+        className={`floating-widget${expanded ? ' expanded' : ''}${pillDirection === 'left' ? ' expands-left' : ''}${chatOpen ? ' chat-open' : ''}`}
+        style={{ '--pill-width': `${pillWidth}px` } as React.CSSProperties}
+        aria-label="HelloSienna assistant"
+        onTransitionEnd={handlePillTransitionEnd}
+      >
         <header
           className="bar-top"
+          onContextMenu={(event) => {
+            event.preventDefault()
+            void toggleChat()
+          }}
           onPointerDown={handleDragStart}
           onPointerMove={handleDragMove}
           onPointerUp={handleDragEnd}
@@ -328,45 +436,41 @@ function App() {
             onPointerLeave={() => setAvatarEdgeHovered(false)}
             onClick={handleAvatarClick}
             aria-label={expanded ? 'Collapse HelloSienna' : 'Expand HelloSienna'}
+            style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
           >
             <img className="avatar-logo" src="/sienna-portrait.png" alt="" aria-hidden="true" />
           </button>
-          <button
-            className="brand-block"
-            onClick={() => {
-              if (!expanded) changeExpanded(true)
-              setSettingsOpen(false)
-            }}
-            aria-label="Open HelloSienna chat"
-            type="button"
-          >
-            <DotMatrixWord />
-          </button>
-          {expanded && (
-            <div className="header-actions">
-              <button
-                type="button"
-                className="icon-btn settings-trigger"
-                onClick={() => setSettingsOpen((open) => !open)}
-                aria-label={settingsOpen ? 'Close settings' : 'Open settings'}
-                title="Settings"
-              >
-                ⚙
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => changeExpanded(false)}
-                aria-label="Collapse"
-                title="Collapse"
-              >
-                ×
-              </button>
+          <div className="pill-connector" aria-hidden="true" />
+          {expanded && pillReady && (
+            <div className={`pill-center${busy ? ' busy' : ''}`}>
+              {state === 'listening' ? (
+                <MicrophoneGlyph available={materialSymbolsAvailable} recording />
+              ) : (
+                <>
+                  {busy && <span className="pill-state-label">{state === 'processing' ? 'THINKING' : state.toUpperCase()}</span>}
+                  {state === 'idle' ? (
+                    <DotMatrixWord onClick={handleVoice} />
+                  ) : (
+                    <span className="pill-message" title={pillMessage}>{pillMessage || statusLabel[state] || state}</span>
+                  )}
+                </>
+              )}
             </div>
+          )}
+          {expanded && (
+            <button
+              type="button"
+              className={`close-cap${busy ? ' cancelling' : ''}`}
+              onClick={() => busy ? handleCancel() : changeExpanded(false)}
+              aria-label={busy ? 'Cancel current request' : 'Collapse HelloSienna'}
+              title={busy ? 'Cancel request' : 'Collapse'}
+            >
+              ×
+            </button>
           )}
         </header>
 
-        {expanded && (
+        {chatOpen && (
           <div className="expanded-content">
             {settingsOpen ? (
               <section className="settings-panel" aria-label="HelloSienna settings">
@@ -437,6 +541,15 @@ function App() {
                   <span className={`state-indicator ${busy ? 'active' : ''}`} />
                   <span>{statusLabel[state] ?? state}</span>
                   <span className="chat-time">{timestamp()}</span>
+                  <button
+                    type="button"
+                    className="icon-btn settings-trigger"
+                    onClick={() => setSettingsOpen((open) => !open)}
+                    aria-label="Open settings"
+                    title="Settings"
+                  >
+                    ⚙
+                  </button>
                 </div>
                 <div className="chat-body" ref={messagesRef} aria-live="polite">
                   {messages.length === 0 && (
@@ -470,16 +583,6 @@ function App() {
                     }}
                     aria-label="Message HelloSienna"
                   />
-                  <button
-                    type="button"
-                    className={`mic-btn ${state === 'listening' ? 'recording' : ''}`}
-                    onClick={handleVoice}
-                    disabled={busy || !backendReady}
-                    aria-label="Speak a message"
-                    title="Record and send a voice request"
-                  >
-                    <span aria-hidden="true">{state === 'listening' ? '●' : '♩'}</span>
-                  </button>
                   <button
                     type="button"
                     className="send-btn"

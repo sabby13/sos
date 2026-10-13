@@ -17,6 +17,7 @@ import queue
 import wave
 from collections import deque
 from dataclasses import dataclass
+from threading import Event
 
 from ..console import get_logger
 from ..errors import SpeechError
@@ -170,6 +171,7 @@ def record_utterance(
     sensitivity: float = 2.5,
     start_timeout_s: float = 6.0,
     include_preroll: bool = True,
+    cancel_event: Event | None = None,
 ) -> Utterance | None:
     """Record until the speaker stops. Returns None if they never started.
 
@@ -194,7 +196,11 @@ def record_utterance(
     waited = 0
 
     while len(collected) < max_blocks:
-        block = mic.read(timeout=2.0)
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+        block = mic.read(timeout=0.1 if cancel_event is not None else 2.0)
+        if cancel_event is not None and cancel_event.is_set():
+            return None
         if block is None:
             if speaking:
                 break  # stream stalled mid-utterance; keep what we have

@@ -4,6 +4,10 @@ const fs = require('fs')
 const { spawn } = require('child_process')
 
 const projectRoot = path.resolve(__dirname, '..', '..')
+const AVATAR_SIZE = 98
+const PILL_WIDTH = 350
+const CHAT_WIDTH = 520
+const CHAT_HEIGHT = 600
 const defaults = {
   alwaysOnTop: true,
   clickThrough: false,
@@ -20,6 +24,9 @@ let preferences = { ...defaults }
 let dragStart = null
 let savePositionTimer = null
 let quitting = false
+let windowExpanded = false
+let windowDirection = 'right'
+let chatVisible = false
 
 function preferencesPath() {
   return path.join(app.getPath('userData'), 'desktop-settings.json')
@@ -136,12 +143,12 @@ function sendBackendRequest(message) {
   })
 }
 
-function usableBounds(bounds) {
+function usableBounds(bounds, minWidth = AVATAR_SIZE, minHeight = AVATAR_SIZE) {
   if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return null
   const display = screen.getDisplayMatching(bounds)
   const area = display.workArea
-  const width = Math.min(Math.max(300, Math.round(bounds.width || 380)), area.width)
-  const height = Math.min(Math.max(116, Math.round(bounds.height || 132)), area.height)
+  const width = Math.min(Math.max(minWidth, Math.round(bounds.width || AVATAR_SIZE)), area.width)
+  const height = Math.min(Math.max(minHeight, Math.round(bounds.height || AVATAR_SIZE)), area.height)
   return {
     x: Math.min(Math.max(Math.round(bounds.x), area.x), area.x + area.width - width),
     y: Math.min(Math.max(Math.round(bounds.y), area.y), area.y + area.height - height),
@@ -150,18 +157,40 @@ function usableBounds(bounds) {
   }
 }
 
+function pillBounds(anchorX, y, width = PILL_WIDTH) {
+  const display = screen.getDisplayMatching({ x: anchorX, y, width: AVATAR_SIZE, height: AVATAR_SIZE })
+  const area = display.workArea
+  const targetWidth = Math.min(width, area.width)
+  const extra = targetWidth - AVATAR_SIZE
+  const visibleAnchorX = Math.min(Math.max(anchorX, area.x), area.x + area.width - AVATAR_SIZE)
+  const rightX = Math.min(Math.max(visibleAnchorX, area.x), area.x + area.width - targetWidth)
+  const leftAnchor = Math.min(Math.max(visibleAnchorX, area.x + extra), area.x + area.width - AVATAR_SIZE)
+  const leftX = leftAnchor - extra
+  const rightShift = Math.abs(rightX - visibleAnchorX)
+  const leftShift = Math.abs(leftAnchor - visibleAnchorX)
+
+  if (visibleAnchorX + targetWidth <= area.x + area.width) {
+    return { x: visibleAnchorX, y, width: targetWidth, direction: 'right' }
+  }
+  if (visibleAnchorX - extra >= area.x) {
+    return { x: visibleAnchorX - extra, y, width: targetWidth, direction: 'left' }
+  }
+  return rightShift <= leftShift
+    ? { x: rightX, y, width: targetWidth, direction: 'right' }
+    : { x: leftX, y, width: targetWidth, direction: 'left' }
+}
+
 function persistWindowPosition() {
   if (!mainWindow || mainWindow.isDestroyed()) return
   clearTimeout(savePositionTimer)
   savePositionTimer = setTimeout(() => {
     const bounds = mainWindow.getBounds()
-    const centerX = bounds.x + bounds.width / 2
-    const centerY = bounds.y + bounds.height / 2
+    const pillWidth = chatVisible ? PILL_WIDTH : bounds.width
     preferences.windowBounds = {
-      x: Math.round(centerX - 190),
-      y: Math.round(centerY - 66),
-      width: 380,
-      height: 132,
+      x: Math.round(bounds.x + (windowDirection === 'left' ? pillWidth - AVATAR_SIZE : 0)),
+      y: Math.round(bounds.y),
+      width: AVATAR_SIZE,
+      height: AVATAR_SIZE,
     }
     savePreferences()
   }, 250)
@@ -175,13 +204,19 @@ function createWindow() {
   }
 
   const display = screen.getPrimaryDisplay()
-  const savedPosition = usableBounds(preferences.windowBounds)
-  const initialBounds = (savedPosition && usableBounds({ ...savedPosition, width: 380, height: 132 })) || {
-    x: Math.round(display.workArea.x + (display.workArea.width - 380) / 2),
-    y: Math.round(display.workArea.y + (display.workArea.height - 132) / 2),
-    width: 380,
-    height: 132,
+  const saved = preferences.windowBounds
+  const migratedPosition = saved && saved.width !== AVATAR_SIZE
+    ? { x: saved.x + 141, y: saved.y + 17, width: AVATAR_SIZE, height: AVATAR_SIZE }
+    : saved
+  const initialBounds = (migratedPosition && usableBounds(migratedPosition)) || {
+    x: Math.round(display.workArea.x + (display.workArea.width - AVATAR_SIZE) / 2),
+    y: Math.round(display.workArea.y + (display.workArea.height - AVATAR_SIZE) / 2),
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
   }
+  windowExpanded = false
+  windowDirection = 'right'
+  chatVisible = false
   mainWindow = new BrowserWindow({
     ...initialBounds,
     show: false,
@@ -303,7 +338,7 @@ app.on('browser-window-created', (_, window) => {
 
 ipcMain.on('backend:request', (event, message) => {
   if (event.sender !== mainWindow?.webContents || !message || typeof message !== 'object') return
-  const allowed = new Set(['ask', 'voice', 'get-settings', 'configure', 'confirmation'])
+  const allowed = new Set(['ask', 'voice', 'get-settings', 'configure', 'confirmation', 'cancel'])
   if (!allowed.has(message.type)) return
   sendBackendRequest(message)
 })
@@ -330,15 +365,51 @@ ipcMain.handle('preferences:set', (_, patch) => {
 })
 
 ipcMain.handle('window:set-expanded', (_, expanded) => {
-  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (!mainWindow || mainWindow.isDestroyed() || typeof expanded !== 'boolean') return null
   const current = mainWindow.getBounds()
-  const width = expanded ? 520 : 380
-  const height = expanded ? 600 : 132
-  const display = screen.getDisplayMatching(current)
+  if (expanded) {
+    chatVisible = false
+    const anchorX = current.x + (windowDirection === 'left' ? current.width - AVATAR_SIZE : 0)
+    const layout = pillBounds(anchorX, current.y)
+    windowExpanded = true
+    windowDirection = layout.direction
+    mainWindow.setBounds({ x: layout.x, y: layout.y, width: layout.width, height: AVATAR_SIZE }, false)
+    persistWindowPosition()
+    return { direction: layout.direction, width: layout.width }
+  }
+
+  const anchorX = current.x + (windowDirection === 'left' ? current.width - AVATAR_SIZE : 0)
+  const compact = usableBounds({ x: anchorX, y: current.y, width: AVATAR_SIZE, height: AVATAR_SIZE })
+  windowExpanded = false
+  chatVisible = false
+  windowDirection = 'right'
+  mainWindow.setBounds(compact, false)
+  persistWindowPosition()
+  return { direction: 'right', width: AVATAR_SIZE }
+})
+
+ipcMain.handle('window:get-pill-layout', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return { direction: 'right', width: PILL_WIDTH }
+  const current = mainWindow.getBounds()
+  const anchorX = current.x + (windowDirection === 'left' ? current.width - AVATAR_SIZE : 0)
+  const layout = pillBounds(anchorX, current.y)
+  return { direction: layout.direction, width: layout.width }
+})
+
+ipcMain.handle('window:set-chat-visible', (_, visible) => {
+  if (!mainWindow || mainWindow.isDestroyed() || typeof visible !== 'boolean') return
+  const current = mainWindow.getBounds()
+  const anchorX = current.x + (windowDirection === 'left' ? current.width - AVATAR_SIZE : 0)
+  const display = screen.getDisplayMatching({ x: anchorX, y: current.y, width: AVATAR_SIZE, height: AVATAR_SIZE })
   const area = display.workArea
-  const x = Math.min(Math.max(current.x + Math.round((current.width - width) / 2), area.x), area.x + area.width - width)
-  const y = Math.min(Math.max(current.y + Math.round((current.height - height) / 2), area.y), area.y + area.height - height)
-  mainWindow.setBounds({ x, y, width, height }, true)
+  const width = visible ? Math.min(CHAT_WIDTH, area.width) : windowExpanded ? PILL_WIDTH : AVATAR_SIZE
+  const height = visible ? Math.min(CHAT_HEIGHT, area.height) : AVATAR_SIZE
+  const pillExtra = PILL_WIDTH - AVATAR_SIZE
+  const x = Math.min(Math.max(anchorX - (windowDirection === 'left' ? pillExtra : 0), area.x), area.x + area.width - width)
+  const y = Math.min(Math.max(current.y, area.y), area.y + area.height - height)
+  if (visible) windowExpanded = true
+  chatVisible = visible
+  mainWindow.setBounds({ x, y, width, height }, false)
   persistWindowPosition()
 })
 
