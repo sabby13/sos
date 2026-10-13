@@ -149,31 +149,10 @@ button {
   box-shadow: 0 0 28px rgba(235, 199, 61, 0.28);
 }
 
-.avatar-face {
-  width: 28px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  position: relative;
-}
-
-.avatar-face i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #f4d64e;
-  box-shadow: 0 0 8px rgba(244, 214, 78, 0.55);
-}
-
-.avatar-face b {
-  position: absolute;
-  left: 6px;
-  bottom: 0;
-  width: 16px;
-  height: 7px;
-  border-bottom: 1px solid #f4d64e;
-  border-radius: 0 0 12px 12px;
+.avatar-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .avatar-pulse {

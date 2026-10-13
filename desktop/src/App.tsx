@@ -293,7 +293,7 @@ function App() {
             aria-label={expanded ? 'Collapse HelloSienna' : 'Expand HelloSienna'}
           >
             <span className="avatar-circle">
-              <span className="avatar-face" aria-hidden="true"><i /><i /><b /></span>
+              <img className="avatar-logo" src="/s_clear.png" alt="" aria-hidden="true" />
               {busy && <span className="avatar-pulse" />}
             </span>
           </button>
