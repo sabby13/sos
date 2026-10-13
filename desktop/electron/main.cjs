@@ -5,7 +5,8 @@ const { spawn } = require('child_process')
 
 const projectRoot = path.resolve(__dirname, '..', '..')
 const AVATAR_SIZE = 98
-const PILL_WIDTH = 350
+const PILL_CAP_SIZE = 68
+const PILL_WIDTH = 356
 const CHAT_WIDTH = 520
 const CHAT_HEIGHT = 600
 const defaults = {
@@ -157,27 +158,35 @@ function usableBounds(bounds, minWidth = AVATAR_SIZE, minHeight = AVATAR_SIZE) {
   }
 }
 
-function pillBounds(anchorX, y, width = PILL_WIDTH) {
-  const display = screen.getDisplayMatching({ x: anchorX, y, width: AVATAR_SIZE, height: AVATAR_SIZE })
+function pillBounds(anchorCenterX, y, width = PILL_WIDTH) {
+  const display = screen.getDisplayMatching({
+    x: anchorCenterX - AVATAR_SIZE / 2,
+    y,
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+  })
   const area = display.workArea
   const targetWidth = Math.min(width, area.width)
   const extra = targetWidth - AVATAR_SIZE
-  const visibleAnchorX = Math.min(Math.max(anchorX, area.x), area.x + area.width - AVATAR_SIZE)
-  const rightX = Math.min(Math.max(visibleAnchorX, area.x), area.x + area.width - targetWidth)
-  const leftAnchor = Math.min(Math.max(visibleAnchorX, area.x + extra), area.x + area.width - AVATAR_SIZE)
-  const leftX = leftAnchor - extra
-  const rightShift = Math.abs(rightX - visibleAnchorX)
-  const leftShift = Math.abs(leftAnchor - visibleAnchorX)
+  const visibleCenterX = Math.min(
+    Math.max(anchorCenterX, area.x + AVATAR_SIZE / 2),
+    area.x + area.width - AVATAR_SIZE / 2,
+  )
+  const rightX = visibleCenterX - AVATAR_SIZE / 2
+  const leftX = rightX - extra
+  if (rightX + targetWidth <= area.x + area.width) {
+    return { x: rightX, y, width: targetWidth, direction: 'right' }
+  }
+  if (leftX >= area.x) {
+    return { x: leftX, y, width: targetWidth, direction: 'left' }
+  }
+  return { x: rightX, y, width: targetWidth, direction: 'right' }
+}
 
-  if (visibleAnchorX + targetWidth <= area.x + area.width) {
-    return { x: visibleAnchorX, y, width: targetWidth, direction: 'right' }
-  }
-  if (visibleAnchorX - extra >= area.x) {
-    return { x: visibleAnchorX - extra, y, width: targetWidth, direction: 'left' }
-  }
-  return rightShift <= leftShift
-    ? { x: rightX, y, width: targetWidth, direction: 'right' }
-    : { x: leftX, y, width: targetWidth, direction: 'left' }
+function avatarCenterX(bounds) {
+  if (!windowExpanded) return bounds.x + AVATAR_SIZE / 2
+  const capOffset = windowDirection === 'left' ? PILL_WIDTH - AVATAR_SIZE / 2 : AVATAR_SIZE / 2
+  return bounds.x + capOffset
 }
 
 function persistWindowPosition() {
@@ -186,8 +195,11 @@ function persistWindowPosition() {
   savePositionTimer = setTimeout(() => {
     const bounds = mainWindow.getBounds()
     const pillWidth = chatVisible ? PILL_WIDTH : bounds.width
+    const centerX = windowExpanded
+      ? bounds.x + (windowDirection === 'left' ? pillWidth - AVATAR_SIZE / 2 : AVATAR_SIZE / 2)
+      : bounds.x + AVATAR_SIZE / 2
     preferences.windowBounds = {
-      x: Math.round(bounds.x + (windowDirection === 'left' ? pillWidth - AVATAR_SIZE : 0)),
+      x: Math.round(centerX - AVATAR_SIZE / 2),
       y: Math.round(bounds.y),
       width: AVATAR_SIZE,
       height: AVATAR_SIZE,
@@ -369,8 +381,7 @@ ipcMain.handle('window:set-expanded', (_, expanded) => {
   const current = mainWindow.getBounds()
   if (expanded) {
     chatVisible = false
-    const anchorX = current.x + (windowDirection === 'left' ? current.width - AVATAR_SIZE : 0)
-    const layout = pillBounds(anchorX, current.y)
+    const layout = pillBounds(avatarCenterX(current), current.y)
     windowExpanded = true
     windowDirection = layout.direction
     mainWindow.setBounds({ x: layout.x, y: layout.y, width: layout.width, height: AVATAR_SIZE }, false)
@@ -378,8 +389,13 @@ ipcMain.handle('window:set-expanded', (_, expanded) => {
     return { direction: layout.direction, width: layout.width }
   }
 
-  const anchorX = current.x + (windowDirection === 'left' ? current.width - AVATAR_SIZE : 0)
-  const compact = usableBounds({ x: anchorX, y: current.y, width: AVATAR_SIZE, height: AVATAR_SIZE })
+  const centerX = avatarCenterX(current)
+  const compact = usableBounds({
+    x: centerX - AVATAR_SIZE / 2,
+    y: current.y,
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+  })
   windowExpanded = false
   chatVisible = false
   windowDirection = 'right'
@@ -391,21 +407,28 @@ ipcMain.handle('window:set-expanded', (_, expanded) => {
 ipcMain.handle('window:get-pill-layout', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return { direction: 'right', width: PILL_WIDTH }
   const current = mainWindow.getBounds()
-  const anchorX = current.x + (windowDirection === 'left' ? current.width - AVATAR_SIZE : 0)
-  const layout = pillBounds(anchorX, current.y)
+  const layout = pillBounds(avatarCenterX(current), current.y)
   return { direction: layout.direction, width: layout.width }
 })
 
 ipcMain.handle('window:set-chat-visible', (_, visible) => {
   if (!mainWindow || mainWindow.isDestroyed() || typeof visible !== 'boolean') return
   const current = mainWindow.getBounds()
-  const anchorX = current.x + (windowDirection === 'left' ? current.width - AVATAR_SIZE : 0)
-  const display = screen.getDisplayMatching({ x: anchorX, y: current.y, width: AVATAR_SIZE, height: AVATAR_SIZE })
+  const centerX = avatarCenterX(current)
+  const display = screen.getDisplayMatching({
+    x: centerX - PILL_CAP_SIZE / 2,
+    y: current.y,
+    width: PILL_CAP_SIZE,
+    height: AVATAR_SIZE,
+  })
   const area = display.workArea
   const width = visible ? Math.min(CHAT_WIDTH, area.width) : windowExpanded ? PILL_WIDTH : AVATAR_SIZE
   const height = visible ? Math.min(CHAT_HEIGHT, area.height) : AVATAR_SIZE
   const pillExtra = PILL_WIDTH - AVATAR_SIZE
-  const x = Math.min(Math.max(anchorX - (windowDirection === 'left' ? pillExtra : 0), area.x), area.x + area.width - width)
+  const x = Math.min(
+    Math.max(centerX - AVATAR_SIZE / 2 - (windowDirection === 'left' ? pillExtra : 0), area.x),
+    area.x + area.width - width,
+  )
   const y = Math.min(Math.max(current.y, area.y), area.y + area.height - height)
   if (visible) windowExpanded = true
   chatVisible = visible

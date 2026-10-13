@@ -42,7 +42,7 @@ const defaultPreferences: Preferences = {
 }
 
 const activeStates = new Set(['listening', 'transcribing', 'processing', 'executing', 'speaking', 'cancelling'])
-const AVATAR_SIZE = 97.65625
+const PILL_WIDTH = 356
 
 function MicrophoneGlyph({ available, recording }: { available: boolean; recording: boolean }) {
   return (
@@ -72,7 +72,7 @@ function App() {
   const [expanded, setExpanded] = useState(false)
   const [pillReady, setPillReady] = useState(false)
   const [pillDirection, setPillDirection] = useState<'left' | 'right'>('right')
-  const [pillWidth, setPillWidth] = useState(350)
+  const [pillWidth, setPillWidth] = useState(PILL_WIDTH)
   const [chatOpen, setChatOpen] = useState(false)
   const [pillMessage, setPillMessage] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -357,8 +357,7 @@ function App() {
     if (expanded) {
       setPillReady(true)
     } else {
-      setPillDirection('right')
-      void window.helloSienna.setExpanded(false)
+      void window.helloSienna.setExpanded(false).then(() => setPillDirection('right'))
     }
   }
 
@@ -436,9 +435,8 @@ function App() {
             onPointerLeave={() => setAvatarEdgeHovered(false)}
             onClick={handleAvatarClick}
             aria-label={expanded ? 'Collapse HelloSienna' : 'Expand HelloSienna'}
-            style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
           >
-            <img className="avatar-logo" src="/sienna-portrait.png" alt="" aria-hidden="true" />
+            <img className="avatar-logo" src="/s_clear.png" alt="" aria-hidden="true" />
           </button>
           <div className="pill-connector" aria-hidden="true" />
           {expanded && pillReady && (
