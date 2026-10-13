@@ -50,8 +50,8 @@ button {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 112px;
-  height: 112px;
+  width: 97.65625px;
+  height: 97.65625px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   transition: width 260ms cubic-bezier(0.2, 0.8, 0.2, 1), height 260ms ease, border-radius 260ms ease;
@@ -73,16 +73,13 @@ button {
 
 .bar-top {
   position: relative;
-  width: 112px;
-  height: 112px;
+  width: 97.65625px;
+  height: 97.65625px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background:
-    radial-gradient(circle at 50% 45%, rgba(244, 214, 78, 0.045), transparent 54%),
-    rgba(4, 5, 7, 0.97);
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.42), inset 0 0 0 1px rgba(244, 214, 78, 0.14);
+  background: #030303;
   touch-action: none;
   cursor: grab;
   user-select: none;
@@ -104,8 +101,8 @@ button {
 
 .avatar-wrap {
   position: relative;
-  width: 76px;
-  height: 76px;
+  width: 97.65625px;
+  height: 97.65625px;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -113,7 +110,11 @@ button {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: transparent;
+  overflow: visible;
+  background: radial-gradient(circle, #030303 99%, transparent 100%);
+  background-size: 95% 95%;
+  background-position: center;
+  background-repeat: no-repeat;
   cursor: pointer;
   -webkit-app-region: no-drag;
 }
@@ -121,51 +122,20 @@ button {
 .expanded .avatar-wrap {
   width: 68px;
   height: 68px;
-}
-
-.avatar-circle {
-  position: relative;
-  width: 70px;
-  height: 70px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(248, 222, 100, 0.82);
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 50% 40%, rgba(245, 219, 104, 0.1), transparent 58%),
-    #030303;
-  box-shadow: 0 0 20px rgba(235, 199, 61, 0.12), inset 0 0 0 4px rgba(255, 230, 120, 0.025);
-  transition: transform 220ms ease, box-shadow 220ms ease;
-}
-
-.expanded .avatar-circle {
-  width: 58px;
-  height: 58px;
-}
-
-.avatar-wrap:hover .avatar-circle {
-  transform: scale(1.045);
-  box-shadow: 0 0 28px rgba(235, 199, 61, 0.28);
+  overflow: hidden;
 }
 
 .avatar-logo {
-  width: 100%;
-  height: 100%;
+  display: block;
+  width: 104%;
+  height: 104%;
+  flex: 0 0 auto;
   object-fit: contain;
 }
 
-.avatar-pulse {
-  position: absolute;
-  inset: -5px;
-  border: 1px solid rgba(244, 214, 78, 0.62);
-  border-radius: 50%;
-  animation: pulse 1.5s ease-out infinite;
-}
-
-@keyframes pulse {
-  0% { transform: scale(0.9); opacity: 0.8; }
-  100% { transform: scale(1.34); opacity: 0; }
+.floating-widget:not(.expanded) .avatar-logo {
+  width: 79.04px;
+  height: 79.04px;
 }
 
 .brand-block {

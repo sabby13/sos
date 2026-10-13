@@ -288,14 +288,11 @@ function App() {
         >
           <button
             type="button"
-            className={`avatar-wrap ${busy ? 'avatar-active' : ''}`}
+            className="avatar-wrap"
             onClick={handleAvatarClick}
             aria-label={expanded ? 'Collapse HelloSienna' : 'Expand HelloSienna'}
           >
-            <span className="avatar-circle">
-              <img className="avatar-logo" src="/s_clear.png" alt="" aria-hidden="true" />
-              {busy && <span className="avatar-pulse" />}
-            </span>
+            <img className="avatar-logo" src="/sienna-portrait.png" alt="" aria-hidden="true" />
           </button>
           <button
             className="brand-block"

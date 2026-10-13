@@ -15,7 +15,7 @@ Python 3.10+ environment. For example, in PowerShell:
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[voice,dev]"
-```
+
 
 Set the provider key used by `config.yaml`/the OpenJarvis configuration in the
 repository `.env` file or your user environment. Never put a key in frontend or
