@@ -3,7 +3,11 @@ type DesktopRequest = {
   type: 'ask' | 'voice' | 'get-settings' | 'configure' | 'confirmation' | 'cancel'
   text?: string
   requestId?: string
-  settings?: { ttsEngine?: 'edge' | 'system' | 'none'; ttsVoice?: string | null }
+  settings?: {
+    ttsEngine?: 'edge' | 'system' | 'none'
+    ttsVoice?: string | null
+    ttsFallback?: 'edge' | 'system' | 'openai' | 'groq' | 'none'
+  }
   confirmationId?: string
   approved?: boolean
 }

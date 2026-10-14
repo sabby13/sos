@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
 
 from openjarvis.errors import SafetyError, ToolError
 from openjarvis.tools.apps import LaunchApplication, resolve_app
-from openjarvis.tools.browser import OpenUrl, WebSearch, normalise_url
+from openjarvis.tools.browser import OpenUrl, PlayYouTube, WebSearch, normalise_url
 from openjarvis.tools.filesystem import (
     CopyItem,
     CreateFolder,
@@ -309,3 +310,59 @@ def test_open_url_reaches_the_browser(ctx, platform):
 def test_web_search_encodes_the_query(ctx, platform):
     run(WebSearch(), ctx, query="python type hints")
     assert "python+type+hints" in platform.opened_urls[0]
+
+
+def test_play_youtube_opens_a_video_radio(monkeypatch, ctx, platform):
+    from openjarvis.tools import browser
+
+    payload = {
+        "videoRenderer": {
+            "videoId": "abcdefghijk",
+            "title": {"runs": [{"text": "Drake - God's Plan"}]},
+            "navigationEndpoint": {
+                "watchEndpoint": {
+                    "videoId": "abcdefghijk",
+                    "playlistId": "RDabcdefghijk",
+                }
+            },
+        }
+    }
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self, _limit):
+            return json.dumps(payload, separators=(",", ":")).encode()
+
+    monkeypatch.setattr(browser, "urlopen", lambda request, timeout: Response())
+    result = run(PlayYouTube(), ctx, query="Drake songs")
+
+    assert result.ok
+    assert "God's Plan" in result.summary
+    assert platform.opened_urls == [
+        "https://www.youtube.com/watch?v=abcdefghijk"
+        "&list=RDabcdefghijk&start_radio=1&autoplay=1"
+    ]
+
+
+def test_play_youtube_rejects_search_results_without_videos(monkeypatch, ctx, platform):
+    from openjarvis.tools import browser
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self, _limit):
+            return b'{"contents":[]}'
+
+    monkeypatch.setattr(browser, "urlopen", lambda request, timeout: Response())
+    with pytest.raises(ToolError, match="no playable video"):
+        run(PlayYouTube(), ctx, query="unknown artist")
+    assert platform.opened_urls == []

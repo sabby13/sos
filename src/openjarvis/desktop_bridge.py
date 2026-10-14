@@ -157,8 +157,16 @@ class DesktopBridge:
             return
         engine = config.get("ttsEngine")
         voice = config.get("ttsVoice")
+        fallback = config.get("ttsFallback")
         if "ttsVoice" in config and voice is not None and not isinstance(voice, str):
-            self.emit("error", requestId=request_id, message="Speech voice must be a string or null.")
+            self.emit(
+                "error",
+                requestId=request_id,
+                message="Speech voice must be a string or null.",
+            )
+            return
+        if fallback is not None and fallback not in {"edge", "system", "openai", "groq", "none"}:
+            self.emit("error", requestId=request_id, message="Unsupported speech fallback.")
             return
         if engine is not None:
             if engine not in {"edge", "system", "none"}:
@@ -167,7 +175,9 @@ class DesktopBridge:
             self.settings.speech.tts_engine = engine
         if "ttsVoice" in config:
             self.settings.speech.tts_voice = voice
-        if engine is not None or "ttsVoice" in config:
+        if fallback is not None:
+            self.settings.speech.tts_fallback = fallback
+        if engine is not None or "ttsVoice" in config or fallback is not None:
             self._speaker = None
         self.emit("settings", requestId=request_id, settings=self._public_settings())
 

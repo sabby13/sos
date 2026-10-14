@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
+from urllib.error import URLError
 from urllib.parse import quote_plus, urlparse
+from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, Field
 
@@ -72,6 +75,114 @@ class WebSearch(Tool[WebSearchArgs]):
         return ToolResult.success(f"Searching the web for '{query}'.", {"url": url})
 
 
+class PlayYouTubeArgs(BaseModel):
+    query: str = Field(
+        description="Song, artist, or music search to play on YouTube. Include both the "
+        "song and artist when the user names a particular song."
+    )
+
+
+class PlayYouTube(Tool[PlayYouTubeArgs]):
+    name = "play_youtube"
+    description = """
+    Play music on YouTube. Use this when the user asks to play or listen to a song,
+    artist, or music on YouTube. This finds a YouTube video and opens its watch page
+    directly; do not substitute a web search or just open YouTube's search results.
+    """
+    risk = RiskLevel.CAUTION
+    args_model = PlayYouTubeArgs
+
+    def preview(self, args: PlayYouTubeArgs, ctx: ToolContext) -> str:
+        return f"Find and play '{args.query}' on YouTube"
+
+    def run(self, args: PlayYouTubeArgs, ctx: ToolContext) -> ToolResult:
+        query = args.query.strip()
+        if not query:
+            raise ToolError("An empty YouTube music query was given.")
+
+        search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
+        request = Request(search_url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urlopen(request, timeout=12) as response:
+                page = response.read(2_500_000).decode("utf-8", errors="replace")
+        except (OSError, TimeoutError, URLError) as exc:
+            raise ToolError(f"Could not search YouTube for {query!r}: {exc}") from exc
+
+        video = _first_youtube_video(page)
+        if video is None:
+            raise ToolError(f"YouTube returned no playable video for {query!r}.")
+
+        video_id, title, playlist_id = video
+        url = f"https://www.youtube.com/watch?v={video_id}&autoplay=1"
+        if playlist_id:
+            url = (
+                f"https://www.youtube.com/watch?v={video_id}"
+                f"&list={playlist_id}&start_radio=1&autoplay=1"
+            )
+        if not ctx.platform.open_url(url, ctx.settings.tools.browser):
+            raise ToolError(f"No browser was available to play {title!r} on YouTube.")
+
+        return ToolResult.success(
+            f"Opened '{title}' on YouTube for playback.",
+            {"title": title, "url": url},
+        )
+
+
+def _first_youtube_video(page: str) -> tuple[str, str, str | None] | None:
+    """Find the first playable video in YouTube's embedded search-result data."""
+    for match in re.finditer(r'"videoRenderer"\s*:\s*\{', page):
+        start = match.end() - 1
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(page)):
+            char = page[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        renderer = json.loads(page[start : index + 1])
+                    except json.JSONDecodeError:
+                        break
+                    video_id = renderer.get("videoId")
+                    title_data = renderer.get("title", {})
+                    title_runs = title_data.get("runs", []) if isinstance(title_data, dict) else []
+                    title = title_runs[0].get("text", "") if title_runs else ""
+                    navigation = renderer.get("navigationEndpoint", {})
+                    watch = (
+                        navigation.get("watchEndpoint", {})
+                        if isinstance(navigation, dict)
+                        else {}
+                    )
+                    playlist_id = watch.get("playlistId") if isinstance(watch, dict) else None
+                    if (
+                        isinstance(video_id, str)
+                        and re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id)
+                        and isinstance(title, str)
+                        and title.strip()
+                        and not re.search(r"\b(mix|playlist|full album|compilation)\b", title, re.I)
+                    ):
+                        if not isinstance(playlist_id, str) or not re.fullmatch(
+                            r"RD[A-Za-z0-9_-]+", playlist_id
+                        ):
+                            playlist_id = None
+                        return video_id, title.strip(), playlist_id
+                    break
+    return None
+
+
 def normalise_url(raw: str) -> str:
     """Add a scheme where a person would omit one, and refuse dangerous schemes."""
     url = raw.strip().strip('"').strip("'")
@@ -92,4 +203,4 @@ def normalise_url(raw: str) -> str:
     raise ToolError(f"{raw!r} is not a URL. Use web_search to search for it instead.")
 
 
-BROWSER_TOOLS = [OpenUrl(), WebSearch()]
+BROWSER_TOOLS = [OpenUrl(), WebSearch(), PlayYouTube()]

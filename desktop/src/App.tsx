@@ -158,7 +158,11 @@ function App() {
           setPillMessage(event.message ?? 'Could not cancel the active request.')
           break
         case 'speech-error':
-          if (event.message) setToolActivity(event.message)
+          if (event.message) {
+            setToolActivity(event.message)
+            setPillMessage(`Speech playback failed: ${event.message}`)
+            addMessage('assistant', `Speech playback failed: ${event.message}`, event.requestId ? `${event.requestId}-speech-error` : undefined)
+          }
           break
         case 'tool':
           setState('executing')
@@ -198,6 +202,7 @@ function App() {
         settings: {
           ttsEngine: loaded.ttsEngine,
           ttsVoice: loaded.ttsEngine === 'edge' ? 'en-GB-SoniaNeural' : null,
+          ttsFallback: 'none',
         },
       })
       window.helloSienna.send({ id: 'initial-settings', type: 'get-settings' })

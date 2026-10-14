@@ -49,7 +49,7 @@ def test_bridge_configures_sonia_edge_voice() -> None:
     bridge.run(
         io.StringIO(
             '{"id":"configure","type":"configure","settings":'
-            '{"ttsEngine":"edge","ttsVoice":"en-GB-SoniaNeural"}}\n'
+            '{"ttsEngine":"edge","ttsVoice":"en-GB-SoniaNeural","ttsFallback":"none"}}\n'
             '{"type":"shutdown"}\n'
         )
     )
@@ -58,6 +58,7 @@ def test_bridge_configures_sonia_edge_voice() -> None:
     settings = next(event["settings"] for event in events if event["type"] == "settings")
     assert settings["ttsEngine"] == "edge"
     assert settings["ttsVoice"] == "en-GB-SoniaNeural"
+    assert bridge.settings.speech.tts_fallback == "none"
 
 
 def test_bridge_rejects_malformed_text_request_without_calling_provider() -> None:

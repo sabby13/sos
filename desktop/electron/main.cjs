@@ -375,6 +375,7 @@ ipcMain.handle('preferences:set', (_, patch) => {
       settings: {
         ttsEngine: patch.ttsEngine,
         ttsVoice: patch.ttsEngine === 'edge' ? 'en-GB-SoniaNeural' : null,
+        ttsFallback: 'none',
       },
     })
   }
