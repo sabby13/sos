@@ -359,7 +359,7 @@ class DesktopBridge:
                 return
             self.emit("state", state="speaking")
             speaker.speak(text, block=True)
-        except Exception as exc:  # noqa: BLE001 -- speech output must not fail a completed turn.
+        except Exception as exc:
             log.warning(
                 "speech output unavailable (%s): %s",
                 type(exc).__name__,
@@ -410,7 +410,7 @@ class DesktopBridge:
                 else "Request could not be completed.",
             )
             final_state = "error"
-        except Exception as exc:  # noqa: BLE001 -- sanitize unexpected IPC-boundary failures.
+        except Exception as exc:
             if self._turn_cancel.is_set():
                 return
             log.error(
@@ -483,18 +483,14 @@ class DesktopBridge:
         except OllamaError as exc:
             if self._turn_cancel.is_set():
                 return
-            log.warning(
-                "local chat failed (%s): %s",
-                type(exc).__name__,
-                _sanitize_diagnostic(str(exc)),
-            )
+            log.warning("local chat failed (%s): %s", type(exc).__name__, _sanitize_diagnostic(str(exc)))
             self.emit(
                 "error",
                 requestId=request_id,
                 message="Local chat could not be completed.",
             )
             final_state = "error"
-        except Exception as exc:  # noqa: BLE001 -- sanitize unexpected IPC-boundary failures.
+        except Exception as exc:
             if self._turn_cancel.is_set():
                 return
             log.error(
