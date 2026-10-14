@@ -5,8 +5,8 @@ const { spawn } = require('child_process')
 
 const projectRoot = path.resolve(__dirname, '..', '..')
 const AVATAR_SIZE = 98
-const PILL_CAP_SIZE = 68
-const PILL_WIDTH = 356
+const PILL_CAP_SIZE = 98
+const PILL_WIDTH = 606
 const CHAT_WIDTH = 520
 const CHAT_HEIGHT = 600
 const defaults = {
@@ -422,7 +422,7 @@ ipcMain.handle('window:set-chat-visible', (_, visible) => {
     height: AVATAR_SIZE,
   })
   const area = display.workArea
-  const width = visible ? Math.min(CHAT_WIDTH, area.width) : windowExpanded ? PILL_WIDTH : AVATAR_SIZE
+  const width = visible ? Math.min(Math.max(CHAT_WIDTH, PILL_WIDTH), area.width) : windowExpanded ? PILL_WIDTH : AVATAR_SIZE
   const height = visible ? Math.min(CHAT_HEIGHT, area.height) : AVATAR_SIZE
   const pillExtra = PILL_WIDTH - AVATAR_SIZE
   const x = Math.min(

@@ -42,26 +42,15 @@ const defaultPreferences: Preferences = {
 }
 
 const activeStates = new Set(['listening', 'transcribing', 'processing', 'executing', 'speaking', 'cancelling'])
-const PILL_WIDTH = 356
+const PILL_WIDTH = 606
 
-function MicrophoneGlyph({ available, recording }: { available: boolean; recording: boolean }) {
+function DotMatrixWord() {
   return (
-    <span className={`pill-microphone${recording ? ' recording' : ''}${available ? '' : ' font-fallback'}`}>
-      <span className="material-symbols-outlined sienna-microphone" aria-hidden="true">mic</span>
-      <svg className="sienna-microphone-fallback" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-      </svg>
-    </span>
-  )
-}
-
-function DotMatrixWord({ onClick }: { onClick: () => void }) {
-  return (
-    <button className="hello-sienna-text" type="button" onClick={onClick} aria-label="Activate HelloSienna voice">
+    <span className="hello-sienna-text" aria-label="HelloSienna">
       {'helloSienna'.split('').map((character, index) => (
         <span key={`${character}-${index}`} style={{ animationDelay: `${index * 38}ms` }}>{character}</span>
       ))}
-    </button>
+    </span>
   )
 }
 function timestamp() {
@@ -80,7 +69,6 @@ function App() {
   const [input, setInput] = useState('')
   const [voicePending, setVoicePending] = useState(false)
   const [state, setState] = useState('idle')
-  const [materialSymbolsAvailable, setMaterialSymbolsAvailable] = useState(false)
   const [backendReady, setBackendReady] = useState(false)
   const [backendSettings, setBackendSettings] = useState<BackendSettings | null>(null)
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences)
@@ -94,21 +82,6 @@ function App() {
   const suppressAvatarClickRef = useRef(0)
   const activeRequestIdRef = useRef<string | null>(null)
   const busy = activeStates.has(state) || voicePending
-
-  useEffect(() => {
-    let mounted = true
-    void document.fonts
-      .load('28px "Material Symbols Outlined"', 'mic')
-      .then((fonts) => {
-        if (mounted) setMaterialSymbolsAvailable(fonts.length > 0)
-      })
-      .catch(() => {
-        if (mounted) setMaterialSymbolsAvailable(false)
-      })
-    return () => {
-      mounted = false
-    }
-  }, [])
 
   const addMessage = useCallback((role: Message['role'], text: string, id: string = crypto.randomUUID()) => {
     setMessages((current) => {
@@ -176,6 +149,13 @@ function App() {
           setConfirmation(null)
           setToolActivity('')
           setPillMessage('')
+          if (event.message) {
+            addMessage('assistant', event.message, event.requestId ? `${event.requestId}-cancelled` : undefined)
+          }
+          break
+        case 'cancel-error':
+          setToolActivity(event.message ?? 'Could not cancel the active request.')
+          setPillMessage(event.message ?? 'Could not cancel the active request.')
           break
         case 'speech-error':
           if (event.message) setToolActivity(event.message)
@@ -280,8 +260,6 @@ function App() {
   const handleCancel = useCallback(() => {
     const requestId = activeRequestIdRef.current
     if (!requestId) return
-    setState('cancelling')
-    setPillMessage('Cancelling…')
     window.helloSienna.send({ id: crypto.randomUUID(), type: 'cancel', requestId })
   }, [])
 
@@ -408,7 +386,7 @@ function App() {
   return (
     <main className="desktop-shell">
       <section
-        className={`floating-widget${expanded ? ' expanded' : ''}${pillDirection === 'left' ? ' expands-left' : ''}${chatOpen ? ' chat-open' : ''}`}
+        className={`floating-widget${expanded ? ' expanded' : ''}${pillDirection === 'left' ? ' expands-left' : ''}${chatOpen ? ' chat-open' : ''}${expanded ? ` active-state-${state}` : ''}`}
         style={{ '--pill-width': `${pillWidth}px` } as React.CSSProperties}
         aria-label="HelloSienna assistant"
         onTransitionEnd={handlePillTransitionEnd}
@@ -436,22 +414,37 @@ function App() {
             onClick={handleAvatarClick}
             aria-label={expanded ? 'Collapse HelloSienna' : 'Expand HelloSienna'}
           >
-            <img className="avatar-logo" src="/s_clear.png" alt="" aria-hidden="true" />
+            <img className="avatar-logo" src="./s_clear.png" alt="" aria-hidden="true" />
           </button>
           <div className="pill-connector" aria-hidden="true" />
           {expanded && pillReady && (
-            <div className={`pill-center${busy ? ' busy' : ''}`}>
-              {state === 'listening' ? (
-                <MicrophoneGlyph available={materialSymbolsAvailable} recording />
-              ) : (
-                <>
-                  {busy && <span className="pill-state-label">{state === 'processing' ? 'THINKING' : state.toUpperCase()}</span>}
-                  {state === 'idle' ? (
-                    <DotMatrixWord onClick={handleVoice} />
-                  ) : (
-                    <span className="pill-message" title={pillMessage}>{pillMessage || statusLabel[state] || state}</span>
-                  )}
-                </>
+            <div className={`pill-center active-state-${state}`} aria-live="polite">
+              <DotMatrixWord />
+              <button
+                type="button"
+                className={`pill-microphone${state === 'listening' ? ' recording' : ''}`}
+                onClick={handleVoice}
+                aria-label={state === 'listening' ? 'Microphone listening' : 'Start voice capture'}
+                title="Start voice capture"
+                disabled={state !== 'idle' || voicePending || !backendReady}
+                tabIndex={state === 'idle' ? 0 : -1}
+              >
+                <img src="./icons/mic.svg" alt="" aria-hidden="true" />
+              </button>
+              {state === 'transcribing' && (
+                <span className="pill-activity processing-dots" role="status" aria-label="Transcribing">
+                  <i /><i /><i />
+                </span>
+              )}
+              {state === 'processing' && (
+                <span className="pill-activity thinking-dots" role="status" aria-label="Thinking">
+                  <i /><i /><i />
+                </span>
+              )}
+              {['executing', 'speaking', 'cancelling', 'error'].includes(state) && (
+                <span className={`pill-message state-${state}`} title={pillMessage}>
+                  {pillMessage || statusLabel[state] || state}
+                </span>
               )}
             </div>
           )}
@@ -463,7 +456,7 @@ function App() {
               aria-label={busy ? 'Cancel current request' : 'Collapse HelloSienna'}
               title={busy ? 'Cancel request' : 'Collapse'}
             >
-              ×
+              <img src="./icons/close.svg" alt="" aria-hidden="true" />
             </button>
           )}
         </header>

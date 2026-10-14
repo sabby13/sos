@@ -41,9 +41,9 @@ actions show the OpenJarvis safety preview and require explicit approval.
 
 ## Settings and controls
 
-- Click Sienna's portrait to unfold the horizontal voice pill. The `helloSienna`
-  dot-matrix label appears after the pill finishes expanding; click it to start voice
-  capture. The microphone appears and pulses only while the backend is listening.
+- Click Sienna's portrait to unfold the horizontal voice pill. Click the supplied
+  microphone icon to start voice capture. It moves to the pill center and pulses inside
+  a yellow outline only while the backend reports that it is listening.
 - Click the pill's X to collapse while idle, or to cooperatively cancel the current
   request while it is active. In-flight provider calls and desktop actions may finish
   before cancellation is observed; already completed actions cannot be undone.

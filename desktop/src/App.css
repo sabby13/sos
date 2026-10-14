@@ -21,7 +21,7 @@
 
 :root {
   --sienna-accent: #ffda48;
-  --pill-cap-size: 68px;
+  --pill-cap-size: 98px;
 }
 
 html,
@@ -70,11 +70,11 @@ button {
 }
 
 .floating-widget.expanded {
-  width: var(--pill-width, 350px);
+  width: var(--pill-width, 606px);
 }
 
 .floating-widget.chat-open {
-  width: var(--pill-width, 350px);
+  width: var(--pill-width, 606px);
   height: 100%;
 }
 
@@ -129,13 +129,13 @@ button {
 }
 
 .expands-left .avatar-wrap {
-  transform: translateX(calc(var(--pill-width, 356px) - 98px));
+  transform: translateX(calc(var(--pill-width, 606px) - 98px));
   transition: none;
 }
 
 .expanded .avatar-wrap {
-  top: 15px;
-  left: 15px;
+  top: 0;
+  left: 0;
   width: var(--pill-cap-size);
   height: var(--pill-cap-size);
 }
@@ -158,11 +158,11 @@ button {
 
 .pill-connector {
   position: absolute;
-  top: 15px;
-  left: 15px;
-  right: 15px;
+  top: 0;
+  left: 0;
+  right: 0;
   height: var(--pill-cap-size);
-  border-radius: 34px;
+  border-radius: 49px;
   background: rgba(48, 48, 48, 0.96);
   opacity: 0;
   transform: scaleX(0.18);
@@ -182,8 +182,8 @@ button {
 
 .close-cap {
   position: absolute;
-  top: 15px;
-  left: 15px;
+  top: 0;
+  left: 0;
   width: var(--pill-cap-size);
   height: var(--pill-cap-size);
   display: flex;
@@ -196,8 +196,6 @@ button {
   background: #030303;
   color: var(--sienna-accent);
   cursor: pointer;
-  font-size: 20px;
-  line-height: 1;
   opacity: 0;
   pointer-events: none;
   -webkit-app-region: no-drag;
@@ -206,7 +204,7 @@ button {
 }
 
 .expanded:not(.expands-left) .close-cap {
-  transform: translateX(calc(var(--pill-width, 356px) - 98px));
+  transform: translateX(calc(var(--pill-width, 606px) - 98px));
 }
 
 .expanded .close-cap {
@@ -215,75 +213,49 @@ button {
 }
 
 .expands-left .close-cap {
-  left: 15px;
-  transform: translateX(calc(var(--pill-width, 356px) - 98px));
+  left: 0;
+  transform: translateX(calc(var(--pill-width, 606px) - 98px));
 }
 
 .expanded.expands-left .close-cap {
   transform: translateX(0);
 }
 
-.sienna-microphone {
-  font-family: 'Material Symbols Outlined';
-  font-size: 28px;
-  color: var(--sienna-accent);
-  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 28;
-  line-height: 1;
-}
-
-.pill-microphone.font-fallback .sienna-microphone {
-  visibility: hidden;
-}
-
-.sienna-microphone-fallback {
+.floating-widget.expanded.active-state-listening::after {
   position: absolute;
-  width: 28px;
-  height: 28px;
-  display: none;
-  fill: currentColor;
-}
-
-.pill-microphone.font-fallback .sienna-microphone-fallback {
-  display: block;
-}
-
-.pill-microphone.recording .sienna-microphone,
-.pill-microphone.recording .sienna-microphone-fallback {
-  animation: microphone-pulse 1.25s ease-in-out infinite;
+  inset: 0;
+  z-index: 4;
+  border: 1.75px solid var(--sienna-accent);
+  border-radius: 49px;
+  content: '';
+  pointer-events: none;
 }
 
 .pill-center {
   position: absolute;
-  left: 68px;
+  left: var(--pill-cap-size);
   top: 0;
-  width: calc(var(--pill-width, 356px) - 136px);
-  height: 97.65625px;
+  width: calc(var(--pill-width, 606px) - 196px);
+  height: var(--pill-cap-size);
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 24px;
   overflow: hidden;
   text-align: center;
   z-index: 2;
   animation: pill-content-in 160ms ease both;
 }
 
-.pill-state-label {
-  max-width: 90%;
-  overflow: hidden;
-  color: rgba(255, 218, 72, 0.62);
-  font-size: 7px;
-  letter-spacing: 0.18em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .pill-message {
-  max-width: 90%;
+  position: absolute;
+  inset: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
   color: var(--sienna-accent);
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -291,19 +263,17 @@ button {
 
 .hello-sienna-text {
   display: flex;
+  width: 230px;
+  flex: 0 0 230px;
   align-items: center;
   justify-content: center;
   gap: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
   color: #ffdb4d;
-  cursor: pointer;
   font-family: 'LED Counter 7', monospace;
-  font-size: 26px;
+  font-size: 32px;
   font-weight: 400;
   line-height: 1;
-  letter-spacing: 0;
+  letter-spacing: 5px;
   white-space: nowrap;
 }
 
@@ -315,16 +285,105 @@ button {
 
 .pill-microphone {
   position: relative;
-  width: 36px;
-  height: 36px;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--sienna-accent);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  opacity: 1;
+  transform: translateX(0);
+  transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 220ms ease;
+  -webkit-app-region: no-drag;
 }
 
-.pill-microphone .sienna-microphone-fallback {
-  display: none;
+.pill-microphone img {
+  display: block;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  transition: scale 220ms ease, opacity 220ms ease;
+}
+
+.pill-center:not(.active-state-idle) .hello-sienna-text {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.pill-center.active-state-listening .pill-microphone {
+  transform: translateX(-127px);
+}
+
+.pill-center:not(.active-state-idle):not(.active-state-listening) .pill-microphone {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pill-microphone:disabled {
+  cursor: default;
+}
+
+.pill-microphone.recording img {
+  animation: microphone-pulse 1.35s ease-in-out infinite;
+}
+
+.pill-activity {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transform: translate(-50%, -50%);
+}
+
+.pill-activity i {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--sienna-accent);
+}
+
+.processing-dots i {
+  animation: processing-dot 900ms ease-in-out infinite;
+}
+
+.processing-dots i:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.processing-dots i:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+.thinking-dots {
+  gap: 7px;
+}
+
+.thinking-dots i {
+  width: 5px;
+  height: 5px;
+  animation: thinking-dot 800ms ease-in-out infinite;
+}
+
+.thinking-dots i:nth-child(2) {
+  animation-delay: 140ms;
+}
+
+.thinking-dots i:nth-child(3) {
+  animation-delay: 280ms;
+}
+
+.pill-message.state-speaking {
+  animation: speaking-message 1.8s ease-in-out infinite;
 }
 
 @keyframes led-letter-on {
@@ -349,8 +408,42 @@ button {
     scale: 1;
   }
   50% {
-    opacity: 0.78;
-    scale: 1.08;
+    opacity: 0.82;
+    scale: 1.07;
+  }
+}
+
+@keyframes processing-dot {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes thinking-dot {
+  0%,
+  100% {
+    opacity: 0.35;
+    scale: 0.85;
+  }
+  50% {
+    opacity: 1;
+    scale: 1.1;
+  }
+}
+
+@keyframes speaking-message {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.76;
   }
 }
 
