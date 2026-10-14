@@ -14,6 +14,8 @@ const defaults = {
   clickThrough: false,
   startAtLogin: false,
   ttsEngine: 'edge',
+  textProvider: 'ollama',
+  ollamaModel: '',
   windowBounds: null,
 }
 
@@ -350,7 +352,16 @@ app.on('browser-window-created', (_, window) => {
 
 ipcMain.on('backend:request', (event, message) => {
   if (event.sender !== mainWindow?.webContents || !message || typeof message !== 'object') return
-  const allowed = new Set(['ask', 'voice', 'get-settings', 'configure', 'confirmation', 'cancel'])
+  const allowed = new Set([
+    'ask',
+    'voice',
+    'get-settings',
+    'get-ollama',
+    'ollama-chat',
+    'configure',
+    'confirmation',
+    'cancel',
+  ])
   if (!allowed.has(message.type)) return
   sendBackendRequest(message)
 })
@@ -378,6 +389,12 @@ ipcMain.handle('preferences:set', (_, patch) => {
         ttsFallback: 'none',
       },
     })
+  }
+  if (['ollama', 'openjarvis'].includes(patch.textProvider)) {
+    preferences.textProvider = patch.textProvider
+  }
+  if (typeof patch.ollamaModel === 'string' && patch.ollamaModel.length <= 200) {
+    preferences.ollamaModel = patch.ollamaModel
   }
   savePreferences()
   updateTrayMenu()

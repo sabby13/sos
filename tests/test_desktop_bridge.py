@@ -90,6 +90,27 @@ def test_bridge_cancels_only_the_matching_active_request() -> None:
     assert events[-1]["state"] == "cancelling"
 
 
+def test_bridge_validates_local_chat_context() -> None:
+    assert DesktopBridge._valid_ollama_chat(
+        {
+            "model": "qwen2.5:7b",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+    )
+    assert not DesktopBridge._valid_ollama_chat(
+        {
+            "model": "qwen2.5:7b",
+            "messages": [{"role": "tool", "content": "run this command"}],
+        }
+    )
+    assert not DesktopBridge._valid_ollama_chat(
+        {
+            "model": "qwen2.5:7b",
+            "messages": [{"role": [], "content": "malformed role"}],
+        }
+    )
+
+
 def test_audio_capture_returns_promptly_when_cancelled() -> None:
     class UnreadMicrophone:
         sample_rate = 16_000

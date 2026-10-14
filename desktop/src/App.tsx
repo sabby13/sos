@@ -5,7 +5,7 @@ type Message = {
   id: string
   text: string
   role: 'assistant' | 'user'
-  time: string
+  createdAt: number
 }
 
 type DesktopEvent = HelloSiennaEvent
@@ -24,6 +24,8 @@ type Preferences = {
   clickThrough: boolean
   startAtLogin: boolean
   ttsEngine: 'edge' | 'system' | 'none'
+  textProvider: 'ollama' | 'openjarvis'
+  ollamaModel: string
   windowBounds: { x: number; y: number; width: number; height: number } | null
 }
 
@@ -38,6 +40,8 @@ const defaultPreferences: Preferences = {
   clickThrough: false,
   startAtLogin: false,
   ttsEngine: 'edge',
+  textProvider: 'ollama',
+  ollamaModel: '',
   windowBounds: null,
 }
 
@@ -53,8 +57,18 @@ function DotMatrixWord() {
     </span>
   )
 }
-function timestamp() {
-  return new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+function timestamp(value: number) {
+  return new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+function conversationTimestamp(value: number) {
+  const date = new Date(value)
+  const today = new Date()
+  const sameDay = date.toDateString() === today.toDateString()
+  const label = sameDay
+    ? 'Today'
+    : date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  return `${label}, ${timestamp(value)}`
 }
 
 function App() {
@@ -63,6 +77,7 @@ function App() {
   const [pillDirection, setPillDirection] = useState<'left' | 'right'>('right')
   const [pillWidth, setPillWidth] = useState(PILL_WIDTH)
   const [chatOpen, setChatOpen] = useState(false)
+  const [chatClosing, setChatClosing] = useState(false)
   const [pillMessage, setPillMessage] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
@@ -71,6 +86,8 @@ function App() {
   const [state, setState] = useState('idle')
   const [backendReady, setBackendReady] = useState(false)
   const [backendSettings, setBackendSettings] = useState<BackendSettings | null>(null)
+  const [ollamaAvailable, setOllamaAvailable] = useState(false)
+  const [ollamaModels, setOllamaModels] = useState<{ name: string; size: number }[]>([])
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences)
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null)
   const [toolActivity, setToolActivity] = useState('')
@@ -78,15 +95,19 @@ function App() {
   const [avatarEdgeDragging, setAvatarEdgeDragging] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const messagesRef = useRef<HTMLDivElement | null>(null)
+  const messagesAtBottomRef = useRef(true)
   const dragRef = useRef<{ x: number; y: number; moved: boolean; source: 'header' | 'avatar-edge' } | null>(null)
   const suppressAvatarClickRef = useRef(0)
   const activeRequestIdRef = useRef<string | null>(null)
   const busy = activeStates.has(state) || voicePending
+  const selectedOllamaModel = ollamaModels.some((model) => model.name === preferences.ollamaModel)
+    ? preferences.ollamaModel
+    : ollamaModels[0]?.name ?? preferences.ollamaModel
 
   const addMessage = useCallback((role: Message['role'], text: string, id: string = crypto.randomUUID()) => {
     setMessages((current) => {
       if (current.some((message) => message.id === id)) return current
-      return [...current, { id, role, text, time: timestamp() }]
+      return [...current, { id, role, text, createdAt: Date.now() }]
     })
   }, [])
 
@@ -132,6 +153,46 @@ function App() {
           if (event.text) {
             addMessage('assistant', event.text, event.requestId ? `${event.requestId}-reply` : undefined)
             setPillMessage(event.text)
+          }
+          break
+        case 'chat-delta':
+          if (event.requestId && event.text) {
+            const messageId = `${event.requestId}-reply`
+            const delta = event.text
+            setMessages((current) => {
+              const existing = current.find((message) => message.id === messageId)
+              if (existing) {
+                return current.map((message) =>
+                  message.id === messageId ? { ...message, text: message.text + delta } : message,
+                )
+              }
+              return [...current, {
+                id: messageId,
+                role: 'assistant',
+                text: delta,
+                createdAt: Date.now(),
+              }]
+            })
+          }
+          break
+        case 'chat-complete':
+          if (event.requestId && typeof event.text === 'string') {
+            const messageId = `${event.requestId}-reply`
+            const response = event.text
+            setMessages((current) => {
+              const existing = current.find((message) => message.id === messageId)
+              if (existing) {
+                return current.map((message) =>
+                  message.id === messageId ? { ...message, text: response } : message,
+                )
+              }
+              return [...current, {
+                id: messageId,
+                role: 'assistant',
+                text: response,
+                createdAt: Date.now(),
+              }]
+            })
           }
           break
         case 'error':
@@ -190,6 +251,11 @@ function App() {
           setBackendReady(true)
           if (event.settings) setBackendSettings(event.settings)
           break
+        case 'ollama-status':
+          setOllamaAvailable(Boolean(event.available))
+          setOllamaModels(event.models ?? [])
+          if (!activeRequestIdRef.current) setToolActivity(event.message ?? '')
+          break
       }
     })
 
@@ -206,6 +272,7 @@ function App() {
         },
       })
       window.helloSienna.send({ id: 'initial-settings', type: 'get-settings' })
+      window.helloSienna.send({ id: 'initial-ollama-status', type: 'get-ollama' })
     })
     return () => {
       mounted = false
@@ -218,7 +285,8 @@ function App() {
   }, [chatOpen, settingsOpen])
 
   useEffect(() => {
-    if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight
+    const element = messagesRef.current
+    if (element && messagesAtBottomRef.current) element.scrollTop = element.scrollHeight
   }, [messages])
 
   const changeExpanded = useCallback(async (value: boolean) => {
@@ -241,11 +309,16 @@ function App() {
   }, [chatOpen])
 
   const changeChatVisible = useCallback(async (visible: boolean) => {
+    if (!visible && chatOpen) {
+      setChatClosing(true)
+      return
+    }
     if (visible && !expanded) await changeExpanded(true)
+    setChatClosing(false)
     setChatOpen(visible)
     if (!visible) setSettingsOpen(false)
     await window.helloSienna.setChatVisible(visible)
-  }, [changeExpanded, expanded])
+  }, [changeExpanded, chatOpen, expanded])
 
   const toggleChat = useCallback(async () => {
     await changeChatVisible(!chatOpen)
@@ -253,12 +326,35 @@ function App() {
 
   const handleSend = () => {
     const text = input.trim()
-    if (!text || activeStates.has(state)) return
+    if (!text || busy) return
+    if (preferences.textProvider === 'ollama' && (!selectedOllamaModel || !ollamaAvailable)) {
+      setToolActivity(
+        ollamaAvailable
+          ? 'Select an installed Ollama model in Settings before sending a local chat.'
+          : 'Ollama is unavailable. Start Ollama and refresh its status in Settings.',
+      )
+      return
+    }
     const requestId = crypto.randomUUID()
     addMessage('user', text, requestId)
     setInput('')
     setState('processing')
     activeRequestIdRef.current = requestId
+    if (preferences.textProvider === 'ollama') {
+      const context = [...messages.slice(-19), {
+        id: requestId,
+        role: 'user' as const,
+        text,
+        createdAt: Date.now(),
+      }].map(({ role, text: content }) => ({ role, content }))
+      window.helloSienna.send({
+        id: requestId,
+        type: 'ollama-chat',
+        model: selectedOllamaModel,
+        messages: context,
+      })
+      return
+    }
     window.helloSienna.send({ id: requestId, type: 'ask', text })
   }
 
@@ -341,6 +437,7 @@ function App() {
 
   const handleAvatarClick = () => {
     if (Date.now() < suppressAvatarClickRef.current) return
+    if (chatOpen) return
     changeExpanded(!expanded)
   }
 
@@ -353,8 +450,28 @@ function App() {
     }
   }
 
+  const handleChatFoldEnd = (event: React.AnimationEvent<HTMLDivElement>) => {
+    if (event.animationName !== 'chat-fold' || !chatClosing) return
+    setChatOpen(false)
+    setChatClosing(false)
+    setSettingsOpen(false)
+    void window.helloSienna.setChatVisible(false)
+  }
+
   const updatePreference = async (patch: Partial<Preferences>) => {
     await syncPreferences(patch)
+  }
+
+  const refreshOllama = () => {
+    window.helloSienna.send({ id: crypto.randomUUID(), type: 'get-ollama' })
+  }
+
+  const updateMessageScrollPosition = () => {
+    const element = messagesRef.current
+    if (element) {
+      messagesAtBottomRef.current =
+        element.scrollHeight - element.scrollTop - element.clientHeight < 80
+    }
   }
 
   const statusLabel: Record<string, string> = {
@@ -400,7 +517,7 @@ function App() {
   return (
     <main className="desktop-shell">
       <section
-        className={`floating-widget${expanded ? ' expanded' : ''}${pillDirection === 'left' ? ' expands-left' : ''}${chatOpen ? ' chat-open' : ''}${expanded ? ` active-state-${state}` : ''}`}
+        className={`floating-widget${expanded ? ' expanded' : ''}${pillDirection === 'left' ? ' expands-left' : ''}${chatOpen ? ' chat-open' : ''}${chatClosing ? ' chat-closing' : ''}${expanded ? ` active-state-${state}` : ''}`}
         style={{ '--pill-width': `${pillWidth}px` } as React.CSSProperties}
         aria-label="HelloSienna assistant"
         onTransitionEnd={handlePillTransitionEnd}
@@ -416,6 +533,17 @@ function App() {
           onPointerUp={handleDragEnd}
           onPointerCancel={handleDragEnd}
         >
+          {chatOpen && (
+            <button
+              type="button"
+              className="chat-menu-button"
+              onClick={() => setSettingsOpen((open) => !open)}
+              aria-label={settingsOpen ? 'Return to conversation' : 'Open settings'}
+              title={settingsOpen ? 'Return to conversation' : 'Settings'}
+            >
+              <img src="./icons/menu.svg" alt="" aria-hidden="true" />
+            </button>
+          )}
           <button
             type="button"
             className={`avatar-wrap${avatarEdgeHovered ? ' edge-hovered' : ''}${avatarEdgeDragging ? ' edge-dragging' : ''}`}
@@ -433,15 +561,27 @@ function App() {
           <div className="pill-connector" aria-hidden="true" />
           {expanded && pillReady && (
             <div className={`pill-center active-state-${state}`} aria-live="polite">
-              <DotMatrixWord />
+              {!busy ? (
+                <button
+                  type="button"
+                  className="pill-brand-button"
+                  onClick={() => void changeChatVisible(true)}
+                  aria-label="Open HelloSienna chat"
+                  title="Open chat"
+                >
+                  <DotMatrixWord />
+                </button>
+              ) : (
+                <DotMatrixWord />
+              )}
               <button
                 type="button"
                 className={`pill-microphone${state === 'listening' ? ' recording' : ''}`}
                 onClick={handleVoice}
                 aria-label={state === 'listening' ? 'Microphone listening' : 'Start voice capture'}
                 title="Start voice capture"
-                disabled={state !== 'idle' || voicePending || !backendReady}
-                tabIndex={state === 'idle' ? 0 : -1}
+                disabled={busy || !backendReady}
+                tabIndex={!busy ? 0 : -1}
               >
                 <img src="./icons/mic.svg" alt="" aria-hidden="true" />
               </button>
@@ -465,10 +605,14 @@ function App() {
           {expanded && (
             <button
               type="button"
-              className={`close-cap${busy ? ' cancelling' : ''}`}
-              onClick={() => busy ? handleCancel() : changeExpanded(false)}
-              aria-label={busy ? 'Cancel current request' : 'Collapse HelloSienna'}
-              title={busy ? 'Cancel request' : 'Collapse'}
+              className={`close-cap${busy ? ' cancelling' : ''}${chatOpen ? ' chat-close' : ''}`}
+              onClick={() => {
+                if (busy) handleCancel()
+                else if (chatOpen) void changeChatVisible(false)
+                else void changeExpanded(false)
+              }}
+              aria-label={busy ? 'Cancel current request' : chatOpen ? 'Close chat' : 'Collapse HelloSienna'}
+              title={busy ? 'Cancel request' : chatOpen ? 'Close chat' : 'Collapse'}
             >
               <img src="./icons/close.svg" alt="" aria-hidden="true" />
             </button>
@@ -476,7 +620,7 @@ function App() {
         </header>
 
         {chatOpen && (
-          <div className="expanded-content">
+          <div className="expanded-content" onAnimationEnd={handleChatFoldEnd}>
             {settingsOpen ? (
               <section className="settings-panel" aria-label="HelloSienna settings">
                 <div className="panel-heading">
@@ -522,6 +666,36 @@ function App() {
                       <option value="none">Off</option>
                     </select>
                   </label>
+                  <label className="setting-row setting-select">
+                    <span>
+                      <strong>Text-chat provider</strong>
+                      <small>Local Ollama is the default. OpenJarvis uses the configured cloud agent and its safety checks.</small>
+                    </span>
+                    <select
+                      value={preferences.textProvider}
+                      onChange={(event) => void updatePreference({
+                        textProvider: event.target.value as Preferences['textProvider'],
+                      })}
+                    >
+                      <option value="ollama">Ollama (local)</option>
+                      <option value="openjarvis">OpenJarvis agent</option>
+                    </select>
+                  </label>
+                  <label className="setting-row setting-select">
+                    <span><strong>Ollama model</strong><small>Used only for text chat when Ollama is selected.</small></span>
+                    <select
+                      value={selectedOllamaModel}
+                      disabled={!ollamaAvailable || ollamaModels.length === 0}
+                      onChange={(event) => void updatePreference({ ollamaModel: event.target.value })}
+                    >
+                      {ollamaModels.length === 0 && <option value="">No local models found</option>}
+                      {ollamaModels.map((model) => (
+                        <option key={model.name} value={model.name}>
+                          {model.name} · {(model.size / 1_000_000_000).toFixed(1)} GB
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
                 <div className="connection-card">
                   <span className={`connection-dot ${backendSettings?.apiKeyConfigured ? 'connected' : ''}`} />
@@ -536,67 +710,122 @@ function App() {
                     </small>
                   </div>
                 </div>
+                <div className="connection-card">
+                  <span className={`connection-dot ${ollamaAvailable ? 'connected' : ''}`} />
+                  <div>
+                    <strong>{ollamaAvailable ? 'Ollama is running locally' : 'Ollama is unavailable'}</strong>
+                    <small>
+                      {ollamaAvailable
+                        ? ollamaModels.length
+                          ? `${ollamaModels.length} installed model(s). Local chat stays on this device.`
+                          : 'Service is reachable, but no models are installed. Ollama does not download models automatically.'
+                        : 'Connect only to 127.0.0.1:11434. Local chat will not fall back to a cloud provider.'}
+                    </small>
+                    <button className="text-button" type="button" onClick={refreshOllama}>
+                      Refresh Ollama status
+                    </button>
+                  </div>
+                </div>
                 <button className="text-button quit-button" type="button" onClick={() => window.helloSienna.closeApp()}>
                   Quit HelloSienna
                 </button>
               </section>
             ) : (
               <>
-                <div className="chat-header">
-                  <span className={`state-indicator ${busy ? 'active' : ''}`} />
-                  <span>{statusLabel[state] ?? state}</span>
-                  <span className="chat-time">{timestamp()}</span>
-                  <button
-                    type="button"
-                    className="icon-btn settings-trigger"
-                    onClick={() => setSettingsOpen((open) => !open)}
-                    aria-label="Open settings"
-                    title="Settings"
-                  >
-                    ⚙
-                  </button>
-                </div>
-                <div className="chat-body" ref={messagesRef} aria-live="polite">
+                <div
+                  className="chat-body"
+                  ref={messagesRef}
+                  onScroll={updateMessageScrollPosition}
+                  aria-live="polite"
+                >
                   {messages.length === 0 && (
                     <div className="empty-state">
-                      <span className="empty-orbit">✳</span>
                       <strong>Here when you need me.</strong>
-                      <span>Ask OpenJarvis anything or use the microphone for a spoken request.</span>
+                      <span>
+                        {preferences.textProvider === 'ollama'
+                          ? 'Text stays on this device and uses your selected local Ollama model.'
+                          : 'Messages use the OpenJarvis agent, including its configured provider and safety checks.'}
+                      </span>
                     </div>
                   )}
-                  {messages.map((message) => (
-                    <div key={message.id} className={`message-row ${message.role}`}>
-                      <div className="message-bubble">{message.text}</div>
-                      <span className="message-time">{message.time}</span>
+                  {messages.map((message, index) => {
+                    const previous = messages[index - 1]
+                    const showDate = !previous
+                      || new Date(previous.createdAt).toDateString()
+                        !== new Date(message.createdAt).toDateString()
+                    return (
+                      <div key={message.id} className="message-group">
+                        {showDate && (
+                          <div className="chat-date">{conversationTimestamp(message.createdAt)}</div>
+                        )}
+                        <div className={`message-row ${message.role}`}>
+                          <div className="message-bubble">{message.text}</div>
+                          <span className="message-time">{timestamp(message.createdAt)}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {busy && state === 'processing' && (
+                    <div className="chat-pending" role="status" aria-label="Sienna is thinking">
+                      <i /><i /><i />
                     </div>
-                  ))}
+                  )}
                 </div>
                 {toolActivity && <div className="activity-line" title={toolActivity}>{toolActivity}</div>}
                 <div className="composer">
-                  <textarea
-                    ref={inputRef}
-                    value={input}
-                    rows={1}
-                    maxLength={8000}
-                    onChange={(event) => setInput(event.target.value)}
-                    placeholder="Ask Sienna anything…"
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault()
-                        handleSend()
-                      }
-                    }}
-                    aria-label="Message HelloSienna"
-                  />
                   <button
                     type="button"
-                    className="send-btn"
-                    onClick={handleSend}
-                    disabled={busy || !input.trim() || !backendReady}
-                    aria-label="Send message"
+                    className="attach-btn"
+                    onClick={() => setToolActivity('Attachments are not supported by the current chat backend.')}
+                    aria-label="Attachments unavailable"
+                    title="Attachments are not supported"
                   >
-                    ↑
+                    <img src="./icons/add.svg" alt="" aria-hidden="true" />
                   </button>
+                  <div className={`chat-input-pill${state === 'listening' ? ' listening' : ''}`}>
+                    <textarea
+                      ref={inputRef}
+                      value={input}
+                      rows={1}
+                      maxLength={8000}
+                      onChange={(event) => setInput(event.target.value)}
+                      placeholder={
+                        state === 'listening'
+                          ? 'Listening…'
+                          : state === 'transcribing'
+                            ? 'Transcribing…'
+                            : state === 'processing'
+                              ? 'Thinking…'
+                              : state === 'executing'
+                                ? 'Working…'
+                                : state === 'speaking'
+                                  ? 'Speaking…'
+                                  : 'type or speak'
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                          event.preventDefault()
+                          handleSend()
+                        }
+                      }}
+                      aria-label="Message HelloSienna"
+                      disabled={busy}
+                    />
+                    <button
+                      type="button"
+                      className="composer-action"
+                      onClick={input.trim() ? handleSend : handleVoice}
+                      disabled={busy || !backendReady}
+                      aria-label={input.trim() ? 'Send message' : 'Start voice capture'}
+                      title={input.trim() ? 'Send' : 'Start voice capture'}
+                    >
+                      <img
+                        src={input.trim() ? './icons/arrow.svg' : './icons/mic.svg'}
+                        alt=""
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </div>
                 </div>
               </>
             )}

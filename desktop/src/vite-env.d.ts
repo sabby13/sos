@@ -1,7 +1,9 @@
 type DesktopRequest = {
   id: string
-  type: 'ask' | 'voice' | 'get-settings' | 'configure' | 'confirmation' | 'cancel'
+  type: 'ask' | 'voice' | 'get-settings' | 'get-ollama' | 'ollama-chat' | 'configure' | 'confirmation' | 'cancel'
   text?: string
+  model?: string
+  messages?: { role: 'user' | 'assistant'; content: string }[]
   requestId?: string
   settings?: {
     ttsEngine?: 'edge' | 'system' | 'none'
@@ -17,6 +19,8 @@ type DesktopPreferences = {
   clickThrough: boolean
   startAtLogin: boolean
   ttsEngine: 'edge' | 'system' | 'none'
+  textProvider: 'ollama' | 'openjarvis'
+  ollamaModel: string
   windowBounds: { x: number; y: number; width: number; height: number } | null
 }
 
@@ -27,6 +31,8 @@ declare global {
     direction?: 'left' | 'right'
     width?: number
     state?: string
+    available?: boolean
+    models?: { name: string; size: number }[]
     text?: string
     message?: string
     hint?: string

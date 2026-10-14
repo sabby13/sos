@@ -71,13 +71,21 @@ class DesktopBridge:
                     settings=self._public_settings(),
                 )
                 continue
+            if request_type == "get-ollama":
+                threading.Thread(
+                    target=self._report_ollama_status,
+                    args=(request_id,),
+                    daemon=True,
+                    name="ollama-status",
+                ).start()
+                continue
             if request_type == "configure":
                 self._configure(request, request_id)
                 continue
             if request_type == "confirmation":
                 self._resolve_confirmation(request)
                 continue
-            if request_type not in {"ask", "voice"}:
+            if request_type not in {"ask", "voice", "ollama-chat"}:
                 self.emit(
                     "error",
                     requestId=request_id,
@@ -92,6 +100,14 @@ class DesktopBridge:
             ):
                 self.emit("error", requestId=request_id, message="Message text is required.")
                 continue
+            if request_type == "ollama-chat" and not self._valid_ollama_chat(request):
+                self.emit(
+                    "error",
+                    requestId=request_id,
+                    message="Ollama chat requires a model and valid user/assistant messages.",
+                    hint="Check the selected local model and try again.",
+                )
+                continue
             if not self._turn_lock.acquire(blocking=False):
                 self.emit(
                     "error",
@@ -103,10 +119,22 @@ class DesktopBridge:
             with self._active_lock:
                 self._active_request_id = request_id
             worker = threading.Thread(
-                target=self._handle_turn,
-                args=(request_type, request_id, request.get("text", "")),
+                target=(
+                    self._handle_ollama_chat
+                    if request_type == "ollama-chat"
+                    else self._handle_turn
+                ),
+                args=(
+                    (request_id, request["model"], request["messages"])
+                    if request_type == "ollama-chat"
+                    else (request_type, request_id, request.get("text", ""))
+                ),
                 daemon=True,
-                name="openjarvis-desktop-turn",
+                name=(
+                    "ollama-desktop-chat"
+                    if request_type == "ollama-chat"
+                    else "openjarvis-desktop-turn"
+                ),
             )
             worker.start()
 
@@ -149,6 +177,44 @@ class DesktopBridge:
             "ttsEngine": self.settings.speech.tts_engine,
             "ttsVoice": self.settings.speech.resolved_tts_voice(),
         }
+
+    @staticmethod
+    def _valid_ollama_chat(request: dict[str, Any]) -> bool:
+        model = request.get("model")
+        messages = request.get("messages")
+        if not isinstance(model, str) or not model.strip() or len(model) > 200:
+            return False
+        if not isinstance(messages, list) or not messages or len(messages) > 40:
+            return False
+        return all(
+            isinstance(message, dict)
+            and isinstance(message.get("role"), str)
+            and message["role"] in {"user", "assistant"}
+            and isinstance(message.get("content"), str)
+            and len(message["content"]) <= 8_000
+            for message in messages
+        )
+
+    def _report_ollama_status(self, request_id: Any) -> None:
+        from .llm.ollama import OllamaClient, OllamaError
+
+        try:
+            models = OllamaClient().list_models()
+        except OllamaError as exc:
+            self.emit(
+                "ollama-status",
+                requestId=request_id,
+                available=False,
+                models=[],
+                message=str(exc),
+            )
+            return
+        self.emit(
+            "ollama-status",
+            requestId=request_id,
+            available=True,
+            models=[{"name": model["name"], "size": model["size"]} for model in models],
+        )
 
     def _configure(self, request: dict[str, Any], request_id: Any) -> None:
         config = request.get("settings")
@@ -316,6 +382,75 @@ class DesktopBridge:
                         "Cancellation was acknowledged. An in-flight provider call or desktop "
                         "action may have finished before it could stop; completed actions "
                         "cannot be undone."
+                    ),
+                )
+                self.emit("state", state="idle", requestId=request_id)
+            else:
+                self.emit("state", state=final_state, requestId=request_id)
+            self._turn_lock.release()
+
+    def _handle_ollama_chat(
+        self,
+        request_id: str,
+        model: str,
+        messages: list[dict[str, str]],
+    ) -> None:
+        from .llm.ollama import OllamaClient, OllamaError
+
+        final_state = "idle"
+        try:
+            self.emit("state", state="processing", requestId=request_id)
+            conversation = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Sienna, a helpful desktop companion. Be clear and concise. "
+                        "You do not have access to desktop tools in local chat."
+                    ),
+                },
+                *messages,
+            ]
+            response = OllamaClient().stream_chat(
+                model,
+                conversation,
+                self._turn_cancel,
+                lambda delta: self.emit(
+                    "chat-delta",
+                    requestId=request_id,
+                    text=delta,
+                ),
+            )
+            if self._turn_cancel.is_set():
+                return
+            self.emit("chat-complete", requestId=request_id, text=response)
+        except OllamaError as exc:
+            if self._turn_cancel.is_set():
+                return
+            self.emit(
+                "error",
+                requestId=request_id,
+                message=str(exc),
+                hint="Check Ollama is running locally and the selected model is installed.",
+            )
+            final_state = "error"
+        except Exception as exc:
+            if self._turn_cancel.is_set():
+                return
+            log.exception("unexpected error handling local chat request %s", request_id)
+            self.emit("error", requestId=request_id, message=str(exc))
+            final_state = "error"
+        finally:
+            cancelled = self._turn_cancel.is_set()
+            with self._active_lock:
+                self._active_request_id = None
+            if cancelled:
+                self.emit(
+                    "cancelled",
+                    requestId=request_id,
+                    message=(
+                        "Cancellation was requested. The local Ollama API has no separate "
+                        "interrupt endpoint; generation stops only as response chunks are "
+                        "received, so a stalled or completed request may finish first."
                     ),
                 )
                 self.emit("state", state="idle", requestId=request_id)
