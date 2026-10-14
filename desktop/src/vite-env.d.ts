@@ -27,6 +27,7 @@ type DesktopPreferences = {
 declare global {
   type HelloSiennaEvent = {
     type: string
+    category: 'user_message' | 'assistant_message' | 'status' | 'tool_result' | 'error'
     requestId?: string
     direction?: 'left' | 'right'
     width?: number

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import uuid
@@ -12,9 +13,32 @@ from typing import Any, TextIO
 
 from .config import API_KEY_ENV, Settings
 from .console import get_logger
-from .errors import JarvisError, SpeechError
+from .errors import JarvisError
 
 log = get_logger("desktop")
+
+_EVENT_CATEGORIES = {
+    "transcript": "user_message",
+    "reply": "assistant_message",
+    "chat-delta": "assistant_message",
+    "chat-complete": "assistant_message",
+    "tool": "tool_result",
+    "tool-result": "tool_result",
+    "tool-blocked": "tool_result",
+    "error": "error",
+    "speech-error": "error",
+    "cancel-error": "error",
+}
+
+
+def _sanitize_diagnostic(value: str) -> str:
+    value = re.sub(r"https?://\S+", "[redacted-url]", value, flags=re.IGNORECASE)
+    value = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [redacted]", value)
+    return re.sub(
+        r"(?i)\b(api[_-]?key|token|secret|authorization)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        value,
+    )
 
 
 class DesktopBridge:
@@ -37,7 +61,11 @@ class DesktopBridge:
         self._active_lock = threading.Lock()
 
     def emit(self, event_type: str, **fields: Any) -> None:
-        message = {"type": event_type, **fields}
+        message = {
+            "type": event_type,
+            "category": _EVENT_CATEGORIES.get(event_type, "status"),
+            **fields,
+        }
         with self._output_lock:
             self.output.write(json.dumps(message, ensure_ascii=True, separators=(",", ":")))
             self.output.write("\n")
@@ -201,12 +229,13 @@ class DesktopBridge:
         try:
             models = OllamaClient().list_models()
         except OllamaError as exc:
+            log.warning("Ollama status unavailable: %s", _sanitize_diagnostic(str(exc)))
             self.emit(
                 "ollama-status",
                 requestId=request_id,
                 available=False,
                 models=[],
-                message=str(exc),
+                message="Ollama is unavailable.",
             )
             return
         self.emit(
@@ -324,14 +353,25 @@ class DesktopBridge:
     def _speak(self, text: str) -> None:
         if self._turn_cancel.is_set():
             return
-        speaker = self._get_speaker()
-        if self._turn_cancel.is_set():
-            return
-        self.emit("state", state="speaking")
         try:
+            speaker = self._get_speaker()
+            if self._turn_cancel.is_set():
+                return
+            self.emit("state", state="speaking")
             speaker.speak(text, block=True)
-        except SpeechError as exc:
-            self.emit("speech-error", message=exc.message)
+        except Exception as exc:  # noqa: BLE001 -- speech output must not fail a completed turn.
+            log.warning(
+                "speech output unavailable (%s): %s",
+                type(exc).__name__,
+                _sanitize_diagnostic(str(exc)),
+            )
+            with self._active_lock:
+                request_id = self._active_request_id
+            self.emit(
+                "speech-error",
+                requestId=request_id,
+                message="Voice playback unavailable.",
+            )
 
     def _handle_turn(self, request_type: str, request_id: str, text: str) -> None:
         final_state = "idle"
@@ -357,18 +397,35 @@ class DesktopBridge:
         except JarvisError as exc:
             if self._turn_cancel.is_set():
                 return
+            log.warning(
+                "desktop request failed (%s): %s",
+                type(exc).__name__,
+                _sanitize_diagnostic(exc.message),
+            )
             self.emit(
                 "error",
                 requestId=request_id,
-                message=exc.message,
-                hint=exc.hint,
+                message="Voice request could not be completed."
+                if request_type == "voice"
+                else "Request could not be completed.",
             )
             final_state = "error"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- sanitize unexpected IPC-boundary failures.
             if self._turn_cancel.is_set():
                 return
-            log.exception("unexpected error handling desktop request %s", request_id)
-            self.emit("error", requestId=request_id, message=str(exc))
+            log.error(
+                "unexpected desktop request failure %s (%s): %s",
+                request_id,
+                type(exc).__name__,
+                _sanitize_diagnostic(str(exc)),
+            )
+            self.emit(
+                "error",
+                requestId=request_id,
+                message="Voice request could not be completed."
+                if request_type == "voice"
+                else "Request could not be completed.",
+            )
             final_state = "error"
         finally:
             cancelled = self._turn_cancel.is_set()
@@ -426,18 +483,27 @@ class DesktopBridge:
         except OllamaError as exc:
             if self._turn_cancel.is_set():
                 return
+            log.warning(
+                "local chat failed (%s): %s",
+                type(exc).__name__,
+                _sanitize_diagnostic(str(exc)),
+            )
             self.emit(
                 "error",
                 requestId=request_id,
-                message=str(exc),
-                hint="Check Ollama is running locally and the selected model is installed.",
+                message="Local chat could not be completed.",
             )
             final_state = "error"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- sanitize unexpected IPC-boundary failures.
             if self._turn_cancel.is_set():
                 return
-            log.exception("unexpected error handling local chat request %s", request_id)
-            self.emit("error", requestId=request_id, message=str(exc))
+            log.error(
+                "unexpected local chat failure %s (%s): %s",
+                request_id,
+                type(exc).__name__,
+                _sanitize_diagnostic(str(exc)),
+            )
+            self.emit("error", requestId=request_id, message="Local chat could not be completed.")
             final_state = "error"
         finally:
             cancelled = self._turn_cancel.is_set()

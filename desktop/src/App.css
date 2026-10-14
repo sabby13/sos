@@ -1020,6 +1020,40 @@ button {
   animation-delay: 280ms;
 }
 
+.chat-error-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 24px 10px;
+  padding: 9px 12px;
+  border: 1px solid rgba(239, 112, 98, 0.36);
+  border-radius: 10px;
+  background: rgba(100, 31, 30, 0.35);
+  color: #f0aaa2;
+  font-size: 11px;
+}
+
+.chat-error-notice button {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border: 1px solid rgba(239, 144, 130, 0.38);
+  border-radius: 7px;
+  background: transparent;
+  color: #ffd0c8;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.chat-error-notice button:hover {
+  background: rgba(239, 112, 98, 0.14);
+}
+
+.chat-error-notice button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .chat-open .composer {
   align-items: center;
   gap: 13px;

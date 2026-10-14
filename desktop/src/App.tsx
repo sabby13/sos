@@ -35,6 +35,11 @@ type PendingConfirmation = {
   detail: string
 }
 
+type ChatError = {
+  message: string
+  retryText?: string
+}
+
 const defaultPreferences: Preferences = {
   alwaysOnTop: true,
   clickThrough: false,
@@ -79,6 +84,7 @@ function App() {
   const [chatOpen, setChatOpen] = useState(false)
   const [chatClosing, setChatClosing] = useState(false)
   const [pillMessage, setPillMessage] = useState('')
+  const [chatError, setChatError] = useState<ChatError | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -99,10 +105,28 @@ function App() {
   const dragRef = useRef<{ x: number; y: number; moved: boolean; source: 'header' | 'avatar-edge' } | null>(null)
   const suppressAvatarClickRef = useRef(0)
   const activeRequestIdRef = useRef<string | null>(null)
+  const chatRequestsRef = useRef(new Map<string, string>())
+  const pillStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const busy = activeStates.has(state) || voicePending
   const selectedOllamaModel = ollamaModels.some((model) => model.name === preferences.ollamaModel)
     ? preferences.ollamaModel
     : ollamaModels[0]?.name ?? preferences.ollamaModel
+
+  const clearPillStatusTimer = useCallback(() => {
+    if (pillStatusTimerRef.current !== null) {
+      clearTimeout(pillStatusTimerRef.current)
+      pillStatusTimerRef.current = null
+    }
+  }, [])
+
+  const showTemporaryPillStatus = useCallback((message: string) => {
+    clearPillStatusTimer()
+    setPillMessage(message)
+    pillStatusTimerRef.current = setTimeout(() => {
+      setPillMessage((current) => current === message ? '' : current)
+      pillStatusTimerRef.current = null
+    }, 4_000)
+  }, [clearPillStatusTimer])
 
   const addMessage = useCallback((role: Message['role'], text: string, id: string = crypto.randomUUID()) => {
     setMessages((current) => {
@@ -127,13 +151,14 @@ function App() {
           setState('idle')
           break
         case 'state':
-          setState(event.state ?? 'idle')
+          setState(event.state === 'error' ? 'idle' : event.state ?? 'idle')
           if (event.state) setVoicePending(false)
           if (event.state === 'idle') {
             setToolActivity('')
-            setPillMessage('')
+            if (pillStatusTimerRef.current === null) setPillMessage('')
             activeRequestIdRef.current = null
           } else if (event.state === 'listening') {
+            clearPillStatusTimer()
             setPillMessage('')
           } else if (event.state === 'transcribing') {
             setPillMessage('Transcribing speech…')
@@ -144,19 +169,21 @@ function App() {
           }
           break
         case 'transcript':
-          if (event.text) {
+          if (event.category === 'user_message' && event.text) {
             addMessage('user', event.text, event.requestId)
             setPillMessage(event.text)
           }
           break
         case 'reply':
-          if (event.text) {
+          if (event.category === 'assistant_message' && event.text) {
             addMessage('assistant', event.text, event.requestId ? `${event.requestId}-reply` : undefined)
             setPillMessage(event.text)
+            if (event.requestId) chatRequestsRef.current.delete(event.requestId)
+            setChatError(null)
           }
           break
         case 'chat-delta':
-          if (event.requestId && event.text) {
+          if (event.category === 'assistant_message' && event.requestId && event.text) {
             const messageId = `${event.requestId}-reply`
             const delta = event.text
             setMessages((current) => {
@@ -176,7 +203,9 @@ function App() {
           }
           break
         case 'chat-complete':
-          if (event.requestId && typeof event.text === 'string') {
+          if (event.category === 'assistant_message' && event.requestId && typeof event.text === 'string') {
+            chatRequestsRef.current.delete(event.requestId)
+            setChatError(null)
             const messageId = `${event.requestId}-reply`
             const response = event.text
             setMessages((current) => {
@@ -198,32 +227,39 @@ function App() {
         case 'error':
           setVoicePending(false)
           if (!event.requestId) setBackendReady(false)
-          setState('error')
-          if (event.message) {
-            setPillMessage(event.message)
-            addMessage('assistant', `${event.message}${event.hint ? `\n${event.hint}` : ''}`, event.requestId ? `${event.requestId}-error` : undefined)
+          setState('idle')
+          if (event.category === 'error') {
+            const failedChatText = event.requestId
+              ? chatRequestsRef.current.get(event.requestId)
+              : undefined
+            if (event.requestId) chatRequestsRef.current.delete(event.requestId)
+            if (failedChatText !== undefined && chatOpen) {
+              setChatError({
+                message: 'I couldn’t complete that request. Please try again.',
+                retryText: failedChatText,
+              })
+            } else {
+              showTemporaryPillStatus(
+                failedChatText !== undefined
+                  ? 'Chat request failed.'
+                  : 'Request could not be completed.',
+              )
+            }
           }
           break
         case 'cancelled':
           activeRequestIdRef.current = null
+          if (event.requestId) chatRequestsRef.current.delete(event.requestId)
           setVoicePending(false)
           setConfirmation(null)
           setToolActivity('')
           setPillMessage('')
-          if (event.message) {
-            addMessage('assistant', event.message, event.requestId ? `${event.requestId}-cancelled` : undefined)
-          }
           break
         case 'cancel-error':
-          setToolActivity(event.message ?? 'Could not cancel the active request.')
-          setPillMessage(event.message ?? 'Could not cancel the active request.')
+          showTemporaryPillStatus('Could not cancel the active request.')
           break
         case 'speech-error':
-          if (event.message) {
-            setToolActivity(event.message)
-            setPillMessage(`Speech playback failed: ${event.message}`)
-            addMessage('assistant', `Speech playback failed: ${event.message}`, event.requestId ? `${event.requestId}-speech-error` : undefined)
-          }
+          if (event.category === 'error') showTemporaryPillStatus('Voice playback unavailable.')
           break
         case 'tool':
           setState('executing')
@@ -254,7 +290,11 @@ function App() {
         case 'ollama-status':
           setOllamaAvailable(Boolean(event.available))
           setOllamaModels(event.models ?? [])
-          if (!activeRequestIdRef.current) setToolActivity(event.message ?? '')
+          if (!activeRequestIdRef.current && !event.available) {
+            setToolActivity('Ollama is unavailable. Start Ollama and refresh its status in Settings.')
+          } else if (!activeRequestIdRef.current) {
+            setToolActivity('')
+          }
           break
       }
     })
@@ -277,8 +317,9 @@ function App() {
     return () => {
       mounted = false
       unsubscribe()
+      clearPillStatusTimer()
     }
-  }, [addMessage])
+  }, [addMessage, chatOpen, clearPillStatusTimer, showTemporaryPillStatus])
 
   useEffect(() => {
     if (chatOpen && !settingsOpen) inputRef.current?.focus()
@@ -324,8 +365,8 @@ function App() {
     await changeChatVisible(!chatOpen)
   }, [changeChatVisible, chatOpen])
 
-  const handleSend = () => {
-    const text = input.trim()
+  const handleSend = (retryText?: string) => {
+    const text = (retryText ?? input).trim()
     if (!text || busy) return
     if (preferences.textProvider === 'ollama' && (!selectedOllamaModel || !ollamaAvailable)) {
       setToolActivity(
@@ -337,6 +378,8 @@ function App() {
     }
     const requestId = crypto.randomUUID()
     addMessage('user', text, requestId)
+    chatRequestsRef.current.set(requestId, text)
+    setChatError(null)
     setInput('')
     setState('processing')
     activeRequestIdRef.current = requestId
@@ -360,6 +403,7 @@ function App() {
 
   const handleVoice = () => {
     if (activeStates.has(state) || voicePending || !backendReady) return
+    clearPillStatusTimer()
     const requestId = crypto.randomUUID()
     activeRequestIdRef.current = requestId
     setVoicePending(true)
@@ -771,6 +815,24 @@ function App() {
                     </div>
                   )}
                 </div>
+                {chatError && (
+                  <div className="chat-error-notice" role="alert">
+                    <span>{chatError.message}</span>
+                    {chatError.retryText !== undefined && (
+                      <button
+                        type="button"
+                        disabled={
+                          busy
+                          || !backendReady
+                          || (preferences.textProvider === 'ollama' && (!selectedOllamaModel || !ollamaAvailable))
+                        }
+                        onClick={() => handleSend(chatError.retryText)}
+                      >
+                        Retry
+                      </button>
+                    )}
+                  </div>
+                )}
                 {toolActivity && <div className="activity-line" title={toolActivity}>{toolActivity}</div>}
                 <div className="composer">
                   <button
@@ -814,7 +876,7 @@ function App() {
                     <button
                       type="button"
                       className="composer-action"
-                      onClick={input.trim() ? handleSend : handleVoice}
+                      onClick={input.trim() ? () => handleSend() : handleVoice}
                       disabled={busy || !backendReady}
                       aria-label={input.trim() ? 'Send message' : 'Start voice capture'}
                       title={input.trim() ? 'Send' : 'Start voice capture'}

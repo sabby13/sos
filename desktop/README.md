@@ -31,7 +31,10 @@ npm run desktop:dev
 `desktop:dev` starts Vite and Electron together. The Electron main process starts
 one long-lived Python bridge; it prefers the repository `.venv` in development,
 then the Python launcher (`py -3`). The bridge uses newline-delimited JSON over
-stdin/stdout, while diagnostics remain on stderr.
+stdin/stdout, while diagnostics remain on stderr. Bridge events are classified as
+user/assistant messages, status, tool results, or errors; only conversational message
+events enter chat history. Voice playback failures are reported as temporary status
+and do not replace a completed command result or assistant response.
 
 The voice button is push-to-talk: click once, speak, and pause. Voice capture,
 transcription, the model/tool loop, safety approval, and speech playback run in

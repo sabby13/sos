@@ -112,6 +112,7 @@ function startBackend() {
   backendProcess.on('error', (error) => {
     emitToRenderer({
       type: 'error',
+      category: 'error',
       message: `Could not start the OpenJarvis backend: ${error.message}`,
       hint: 'Install Python 3.10+ and the OpenJarvis dependencies. See desktop/README.md.',
     })
@@ -120,6 +121,7 @@ function startBackend() {
     if (!quitting) {
       emitToRenderer({
         type: 'error',
+        category: 'error',
         message: `The OpenJarvis backend stopped (${signal || `exit code ${code}`}).`,
       })
     }
@@ -132,13 +134,19 @@ function sendBackendRequest(message) {
     startBackend()
   }
   if (!backendProcess || !backendProcess.stdin.writable) {
-    emitToRenderer({ type: 'error', requestId: message.id, message: 'OpenJarvis is not connected.' })
+    emitToRenderer({
+      type: 'error',
+      category: 'error',
+      requestId: message.id,
+      message: 'OpenJarvis is not connected.',
+    })
     return
   }
   backendProcess.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
     if (error) {
       emitToRenderer({
         type: 'error',
+        category: 'error',
         requestId: message.id,
         message: `Could not send the request to OpenJarvis: ${error.message}`,
       })
