@@ -190,9 +190,18 @@ function App() {
     })
 
     void window.helloSienna.getPreferences().then((loaded) => {
-      if (mounted) setPreferences(loaded)
+      if (!mounted) return
+      setPreferences(loaded)
+      window.helloSienna.send({
+        id: 'initial-tts-settings',
+        type: 'configure',
+        settings: {
+          ttsEngine: loaded.ttsEngine,
+          ttsVoice: loaded.ttsEngine === 'edge' ? 'en-GB-SoniaNeural' : null,
+        },
+      })
+      window.helloSienna.send({ id: 'initial-settings', type: 'get-settings' })
     })
-    window.helloSienna.send({ id: 'initial-settings', type: 'get-settings' })
     return () => {
       mounted = false
       unsubscribe()
@@ -498,7 +507,7 @@ function App() {
                     />
                   </label>
                   <label className="setting-row setting-select">
-                    <span><strong>Speech output</strong><small>Edge Sonia neural voice, offline system voice, or silent</small></span>
+                    <span><strong>Speech output</strong><small>Sonia neural voice (en-GB-SoniaNeural), Windows system voice, or silent</small></span>
                     <select
                       value={preferences.ttsEngine}
                       onChange={(event) => void updatePreference({ ttsEngine: event.target.value as Preferences['ttsEngine'] })}

@@ -369,7 +369,14 @@ ipcMain.handle('preferences:set', (_, patch) => {
   if (typeof patch.startAtLogin === 'boolean') setStartup(patch.startAtLogin)
   if (['edge', 'system', 'none'].includes(patch.ttsEngine)) {
     preferences.ttsEngine = patch.ttsEngine
-    sendBackendRequest({ id: `configure-${Date.now()}`, type: 'configure', settings: { ttsEngine: patch.ttsEngine } })
+    sendBackendRequest({
+      id: `configure-${Date.now()}`,
+      type: 'configure',
+      settings: {
+        ttsEngine: patch.ttsEngine,
+        ttsVoice: patch.ttsEngine === 'edge' ? 'en-GB-SoniaNeural' : null,
+      },
+    })
   }
   savePreferences()
   updateTrayMenu()

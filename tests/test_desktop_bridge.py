@@ -43,6 +43,23 @@ def test_bridge_configures_supported_tts_without_starting_audio() -> None:
     assert settings["ttsEngine"] == "system"
 
 
+def test_bridge_configures_sonia_edge_voice() -> None:
+    output = io.StringIO()
+    bridge = DesktopBridge(output=output)
+    bridge.run(
+        io.StringIO(
+            '{"id":"configure","type":"configure","settings":'
+            '{"ttsEngine":"edge","ttsVoice":"en-GB-SoniaNeural"}}\n'
+            '{"type":"shutdown"}\n'
+        )
+    )
+
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    settings = next(event["settings"] for event in events if event["type"] == "settings")
+    assert settings["ttsEngine"] == "edge"
+    assert settings["ttsVoice"] == "en-GB-SoniaNeural"
+
+
 def test_bridge_rejects_malformed_text_request_without_calling_provider() -> None:
     output = io.StringIO()
     bridge = DesktopBridge(output=output)

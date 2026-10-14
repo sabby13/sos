@@ -57,7 +57,10 @@ actions show the OpenJarvis safety preview and require explicit approval.
   accepting mouse input.
 - The tray menu can show the app, change click-through, restart the Python bridge,
   or quit. Closing the widget hides it in the tray.
-- Speech output choices are Edge Sonia Neural, the Windows system voice, or off.
+- Speech output choices are Microsoft Edge Sonia Neural
+  (`en-GB-SoniaNeural`), the Windows system voice, or off. Selecting Sonia explicitly
+  configures that voice for desktop replies, overriding a different OpenJarvis voice
+  setting for the desktop session.
   STT and the LLM provider/model remain controlled by OpenJarvis configuration.
 
 ## Build and Windows packaging

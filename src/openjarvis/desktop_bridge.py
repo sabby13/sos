@@ -156,11 +156,18 @@ class DesktopBridge:
             self.emit("error", requestId=request_id, message="Settings must be an object.")
             return
         engine = config.get("ttsEngine")
+        voice = config.get("ttsVoice")
+        if "ttsVoice" in config and voice is not None and not isinstance(voice, str):
+            self.emit("error", requestId=request_id, message="Speech voice must be a string or null.")
+            return
         if engine is not None:
             if engine not in {"edge", "system", "none"}:
                 self.emit("error", requestId=request_id, message="Unsupported speech engine.")
                 return
             self.settings.speech.tts_engine = engine
+        if "ttsVoice" in config:
+            self.settings.speech.tts_voice = voice
+        if engine is not None or "ttsVoice" in config:
             self._speaker = None
         self.emit("settings", requestId=request_id, settings=self._public_settings())
 
