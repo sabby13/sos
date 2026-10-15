@@ -261,6 +261,11 @@ function App() {
         case 'speech-error':
           if (event.category === 'error') showTemporaryPillStatus('Voice playback unavailable.')
           break
+        case 'speech-fallback':
+          if (event.category === 'status' && event.message) {
+            showTemporaryPillStatus(event.message)
+          }
+          break
         case 'tool':
           setState('executing')
           setToolActivity(event.preview || event.name || 'Working with a tool')
@@ -308,7 +313,7 @@ function App() {
         settings: {
           ttsEngine: loaded.ttsEngine,
           ttsVoice: loaded.ttsEngine === 'edge' ? 'en-GB-SoniaNeural' : null,
-          ttsFallback: 'none',
+          ttsFallback: 'system',
         },
       })
       window.helloSienna.send({ id: 'initial-settings', type: 'get-settings' })

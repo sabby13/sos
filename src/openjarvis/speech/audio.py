@@ -121,6 +121,16 @@ class Microphone:
             )
             self._stream.start()
         except Exception as exc:
+            stream = self._stream
+            self._stream = None
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception as cleanup_error:  # noqa: BLE001 -- preserve startup error.
+                    log.warning(
+                        "microphone cleanup failed after startup error (%s)",
+                        type(cleanup_error).__name__,
+                    )
             raise SpeechError(
                 f"Could not open the microphone: {exc}",
                 hint="Run `jarvis devices` to list inputs, then set speech.input_device.",

@@ -35,6 +35,63 @@ def test_plain_answer_needs_no_tools(settings, platform, tmp_path):
     assert agent.ask("hi") == "Hello."
 
 
+def test_explicit_voice_launch_uses_safety_checked_tool_without_provider_call(
+    settings, platform, tmp_path
+):
+    agent = build_agent(settings, platform, tmp_path, [text_completion("Unused response.")])
+
+    assert agent.ask("open Chrome", fast_path=True) == "Launched Chrome."
+    assert len(platform.launched) == 1
+    assert agent.provider.script
+    assert agent.last_stats.prompt_tokens == 0
+    assert agent.last_stats.tool_calls == 1
+    assert [message.role for message in agent.history] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+
+
+def test_fast_path_honours_safety_confirmation(settings, platform, tmp_path):
+    settings.safety.always_confirm = ["launch_application"]
+    agent = build_agent(
+        settings,
+        platform,
+        tmp_path,
+        [text_completion("Unused response.")],
+        confirmer=DenyConfirmer(),
+    )
+
+    assert agent.ask("open Chrome", fast_path=True) == "Okay, I've left that alone."
+    assert not platform.launched
+    assert agent.provider.script
+
+
+def test_ambiguous_voice_command_still_uses_provider(settings, platform, tmp_path):
+    agent = build_agent(
+        settings,
+        platform,
+        tmp_path,
+        [text_completion("I need more detail before I do that.")],
+    )
+
+    assert (
+        agent.ask("open Chrome and type hello", fast_path=True)
+        == "I need more detail before I do that."
+    )
+    assert not platform.launched
+    assert not agent.provider.script
+
+
+def test_explicit_voice_url_uses_existing_open_url_tool(settings, platform, tmp_path):
+    agent = build_agent(settings, platform, tmp_path, [text_completion("Unused response.")])
+
+    assert agent.ask("open https://github.com", fast_path=True) == "Opened github.com."
+    assert platform.opened_urls == ["https://github.com"]
+    assert agent.provider.script
+
+
 def test_cancelled_agent_turn_discards_its_conversation(settings, platform, tmp_path):
     cancellation = Event()
 

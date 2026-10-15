@@ -219,7 +219,7 @@ class WindowsAdapter(PlatformAdapter):
             self._mci_alias = alias
         try:
             # `wait` blocks this thread; stop_audio() can still interrupt from another.
-            self._mci_command(f"play {alias}{' wait' if block else ''}", check=False)
+            self._mci_command(f"play {alias}{' wait' if block else ''}")
         finally:
             if block:
                 with self._mci_lock:

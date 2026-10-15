@@ -24,6 +24,7 @@ from typing import Protocol
 
 from ..config import DEFAULT_TTS_VOICES, Settings
 from ..console import get_logger
+from ..diagnostics import sanitize_diagnostic
 from ..errors import SpeechError
 from ..platforms import PlatformAdapter, get_adapter
 
@@ -76,10 +77,13 @@ class EdgeSpeaker:
         try:
             asyncio.run(self._synthesize(text, path))
         except Exception as exc:
+            path.unlink(missing_ok=True)
             raise SpeechError(f"edge-tts failed: {exc}") from exc
 
         try:
             self.platform.play_audio_file(path, block=block)
+        except Exception as exc:
+            raise SpeechError(f"edge-tts playback failed: {exc}") from exc
         finally:
             if block:
                 path.unlink(missing_ok=True)
@@ -108,7 +112,10 @@ class SystemSpeaker:
         self._pyttsx3 = pyttsx3
         self._voice = voice
         self._rate = rate_wpm
-        self._engine = self._make_engine()
+        try:
+            self._engine = self._make_engine()
+        except Exception as exc:
+            raise SpeechError(f"system TTS is unavailable ({type(exc).__name__})") from exc
 
     def _make_engine(self):  # type: ignore[no-untyped-def]
         engine = self._pyttsx3.init()
@@ -185,6 +192,7 @@ class FallbackSpeaker:
         self._primary = primary
         self._backup = backup
         self._failed = False
+        self._fallback_notice_pending = False
 
     @property
     def name(self) -> str:
@@ -196,10 +204,20 @@ class FallbackSpeaker:
                 self._primary.speak(text, block=block)
                 return
             except SpeechError as exc:
-                log.warning("%s TTS failed, switching to %s: %s",
-                            self._primary.name, self._backup.name, exc)
+                log.warning(
+                    "%s TTS failed, switching to %s: %s",
+                    self._primary.name,
+                    self._backup.name,
+                    sanitize_diagnostic(str(exc)),
+                )
                 self._failed = True
+                self._fallback_notice_pending = True
         self._backup.speak(text, block=block)
+
+    def consume_fallback_notice(self) -> bool:
+        pending = self._fallback_notice_pending
+        self._fallback_notice_pending = False
+        return pending
 
     def stop(self) -> None:
         self._primary.stop()

@@ -6,7 +6,10 @@ import io
 import json
 from threading import Event
 
+import pytest
+
 from openjarvis.desktop_bridge import DesktopBridge
+from openjarvis.errors import SpeechError
 from openjarvis.speech.audio import record_utterance
 
 
@@ -114,9 +117,10 @@ def test_voice_speech_failure_does_not_fail_completed_request(caplog) -> None:
     class SuccessfulAgent:
         calls = 0
 
-        def ask(self, text: str, *, cancel_event: Event) -> str:
+        def ask(self, text: str, *, cancel_event: Event, fast_path: bool = False) -> str:
             self.calls += 1
             assert text == "open calculator"
+            assert fast_path
             return "Calculator opened."
 
     class BrokenSpeaker:
@@ -157,10 +161,60 @@ def test_voice_speech_failure_does_not_fail_completed_request(caplog) -> None:
     assert "secret" not in caplog.text
 
 
+def test_voice_tts_fallback_reports_status_without_failing_turn(caplog) -> None:
+    from openjarvis.speech.tts import FallbackSpeaker
+
+    class SuccessfulAgent:
+        def ask(self, text: str, *, cancel_event: Event, fast_path: bool = False) -> str:
+            return "Calculator opened."
+
+    class FailingPrimary:
+        name = "edge"
+
+        def speak(self, text: str, *, block: bool) -> None:
+            raise SpeechError("HTTP 403 https://provider.example/?token=secret")
+
+        def stop(self) -> None:
+            pass
+
+    class SuccessfulFallback:
+        name = "system"
+
+        def speak(self, text: str, *, block: bool) -> None:
+            assert text == "Calculator opened."
+
+        def stop(self) -> None:
+            pass
+
+    output = io.StringIO()
+    bridge = DesktopBridge(output=output)
+    bridge.settings.speech.tts_engine = "edge"
+    bridge._capture_voice = lambda: "open calculator"
+    bridge._get_agent = lambda: SuccessfulAgent()
+    bridge._get_speaker = lambda: FallbackSpeaker(FailingPrimary(), SuccessfulFallback())
+    bridge._turn_lock.acquire()
+    bridge._active_request_id = "voice-fallback"
+
+    with caplog.at_level("WARNING"):
+        bridge._handle_turn("voice", "voice-fallback", "")
+
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    reply = next(event for event in events if event["type"] == "reply")
+    fallback_status = next(event for event in events if event["type"] == "speech-fallback")
+    assert reply["text"] == "Calculator opened."
+    assert fallback_status["category"] == "status"
+    assert fallback_status["message"] == "Neural voice unavailable; using the system voice."
+    assert [event["state"] for event in events if event["type"] == "state"][-1] == "idle"
+    assert not any(event["type"] == "speech-error" for event in events)
+    assert "provider.example" not in caplog.text
+    assert "secret" not in caplog.text
+
+
 def test_successful_voice_turn_keeps_message_categories() -> None:
     class SuccessfulAgent:
-        def ask(self, text: str, *, cancel_event: Event) -> str:
+        def ask(self, text: str, *, cancel_event: Event, fast_path: bool = False) -> str:
             assert text == "what time is it"
+            assert fast_path
             return "It is noon."
 
     class SuccessfulSpeaker:
@@ -226,3 +280,71 @@ def test_audio_capture_returns_promptly_when_cancelled() -> None:
     cancellation = Event()
     cancellation.set()
     assert record_utterance(UnreadMicrophone(), cancel_event=cancellation) is None
+
+
+def test_listening_state_is_emitted_only_after_microphone_start(monkeypatch) -> None:
+    from openjarvis.speech import audio
+
+    output = io.StringIO()
+
+    class StartedMicrophone:
+        started = False
+
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            assert '"listening"' not in output.getvalue()
+            self.started = True
+
+        def stop(self) -> None:
+            self.started = False
+
+    def record_after_start(microphone, **kwargs):
+        assert microphone.started
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert any(event.get("state") == "listening" for event in events)
+        return None
+
+    monkeypatch.setattr(audio, "Microphone", StartedMicrophone)
+    monkeypatch.setattr(audio, "record_utterance", record_after_start)
+    bridge = DesktopBridge(output=output)
+
+    assert bridge._capture_voice() == ""
+
+
+def test_microphone_can_retry_after_stream_start_failure(monkeypatch) -> None:
+    from openjarvis.speech import audio
+
+    class FakeStream:
+        def __init__(self, fail_start: bool) -> None:
+            self.fail_start = fail_start
+            self.closed = False
+            self.started = False
+
+        def start(self) -> None:
+            if self.fail_start:
+                raise RuntimeError("device not ready")
+            self.started = True
+
+        def stop(self) -> None:
+            self.started = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    first = FakeStream(fail_start=True)
+    second = FakeStream(fail_start=False)
+    streams = iter([first, second])
+    monkeypatch.setattr(audio.sd, "RawInputStream", lambda **kwargs: next(streams))
+    microphone = audio.Microphone()
+
+    with pytest.raises(SpeechError, match="Could not open the microphone"):
+        microphone.start()
+
+    assert first.closed
+    assert microphone._stream is None
+    microphone.start()
+    assert microphone._stream is second
+    assert second.started
+    microphone.stop()

@@ -9,6 +9,7 @@ const PILL_CAP_SIZE = 98
 const PILL_WIDTH = 606
 const CHAT_WIDTH = 520
 const CHAT_HEIGHT = 600
+const MAX_BACKEND_RESTARTS = 3
 const defaults = {
   alwaysOnTop: true,
   clickThrough: false,
@@ -23,6 +24,8 @@ let mainWindow = null
 let tray = null
 let backendProcess = null
 let backendBuffer = ''
+let backendRestartTimer = null
+let backendRestartAttempts = 0
 let preferences = { ...defaults }
 let dragStart = null
 let savePositionTimer = null
@@ -87,29 +90,36 @@ function startBackend() {
 
   const launch = pythonLaunch()
   backendBuffer = ''
-  backendProcess = spawn(launch.executable, launch.args, {
+  const child = spawn(launch.executable, launch.args, {
     cwd: projectRoot,
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   })
-  backendProcess.stdout.setEncoding('utf8')
-  backendProcess.stdout.on('data', (chunk) => {
+  backendProcess = child
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => {
     backendBuffer += chunk
     const lines = backendBuffer.split(/\r?\n/)
     backendBuffer = lines.pop() || ''
     for (const line of lines) {
       if (!line.trim()) continue
       try {
-        emitToRenderer(JSON.parse(line))
+        const message = JSON.parse(line)
+        if (message.type === 'ready') {
+          backendRestartAttempts = 0
+          clearTimeout(backendRestartTimer)
+          backendRestartTimer = null
+        }
+        emitToRenderer(message)
       } catch (error) {
         console.error('[HelloSienna] Invalid backend event:', error, line)
       }
     }
   })
-  backendProcess.stderr.setEncoding('utf8')
-  backendProcess.stderr.on('data', (chunk) => console.error('[OpenJarvis]', chunk.trimEnd()))
-  backendProcess.on('error', (error) => {
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk) => console.error('[OpenJarvis]', chunk.trimEnd()))
+  child.on('error', (error) => {
     emitToRenderer({
       type: 'error',
       category: 'error',
@@ -117,16 +127,27 @@ function startBackend() {
       hint: 'Install Python 3.10+ and the OpenJarvis dependencies. See desktop/README.md.',
     })
   })
-  backendProcess.on('exit', (code, signal) => {
+  child.on('exit', (code, signal) => {
     if (!quitting) {
       emitToRenderer({
         type: 'error',
         category: 'error',
         message: `The OpenJarvis backend stopped (${signal || `exit code ${code}`}).`,
       })
+      scheduleBackendRestart()
     }
-    backendProcess = null
+    if (backendProcess === child) backendProcess = null
   })
+}
+
+function scheduleBackendRestart() {
+  if (quitting || backendRestartTimer || backendRestartAttempts >= MAX_BACKEND_RESTARTS) return
+  const delay = Math.min(1000 * (2 ** backendRestartAttempts), 5000)
+  backendRestartAttempts += 1
+  backendRestartTimer = setTimeout(() => {
+    backendRestartTimer = null
+    startBackend()
+  }, delay)
 }
 
 function sendBackendRequest(message) {
@@ -325,6 +346,9 @@ function setClickThrough(enabled) {
 }
 
 function restartBackend() {
+  clearTimeout(backendRestartTimer)
+  backendRestartTimer = null
+  backendRestartAttempts = 0
   if (backendProcess) {
     backendProcess.once('exit', startBackend)
     backendProcess.stdin.end('{"type":"shutdown"}\n')
@@ -394,7 +418,7 @@ ipcMain.handle('preferences:set', (_, patch) => {
       settings: {
         ttsEngine: patch.ttsEngine,
         ttsVoice: patch.ttsEngine === 'edge' ? 'en-GB-SoniaNeural' : null,
-        ttsFallback: 'none',
+        ttsFallback: 'system',
       },
     })
   }
@@ -492,6 +516,8 @@ ipcMain.on('window:drag-end', (event) => {
 app.on('before-quit', () => {
   quitting = true
   clearTimeout(savePositionTimer)
+  clearTimeout(backendRestartTimer)
+  backendRestartTimer = null
   globalShortcut.unregisterAll()
   if (backendProcess && backendProcess.exitCode === null) {
     backendProcess.stdin.end('{"type":"shutdown"}\n')

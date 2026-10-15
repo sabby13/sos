@@ -12,7 +12,10 @@ about a different one.
 
 from __future__ import annotations
 
+import json
+import re
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,11 +28,14 @@ from ..llm.base import Completion, LLMProvider, Message, ToolCall
 from ..platforms import get_adapter
 from ..safety.confirm import Confirmer, ConsoleConfirmer
 from ..safety.policy import SafetyPolicy, Verdict
+from ..tools.apps import BUILTIN_ALIASES
 from ..tools.base import ToolContext, ToolResult
 from ..tools.registry import ToolRegistry, default_registry
 from .prompts import build_system_prompt
 
 log = get_logger("agent")
+_LAUNCH_COMMAND = re.compile(r"(?:please\s+)?(?:open|launch|start)\s+(.+)", re.IGNORECASE)
+_URL_COMMAND = re.compile(r"(?:please\s+)?open\s+((?:https?://|www\.)\S+)", re.IGNORECASE)
 
 
 class TurnCancelled(Exception):
@@ -84,7 +90,13 @@ class Agent:
 
     # ------------------------------------------------------------------ turn
 
-    def ask(self, user_text: str, *, cancel_event: Event | None = None) -> str:
+    def ask(
+        self,
+        user_text: str,
+        *,
+        cancel_event: Event | None = None,
+        fast_path: bool = False,
+    ) -> str:
         """Run one user request to completion and return what to say back."""
         started = time.monotonic()
         stats = TurnStats()
@@ -96,6 +108,35 @@ class Agent:
                 raise TurnCancelled()
 
         try:
+            check_cancelled()
+            command = self._fast_path_command(user_text) if fast_path else None
+            if command is not None:
+                tool_name, arguments = command
+                call = ToolCall(
+                    id=uuid.uuid4().hex,
+                    name=tool_name,
+                    arguments=json.dumps(arguments),
+                )
+                self._history.append(Message.assistant(None, [call]))
+                result = self._run_one(call)
+                check_cancelled()
+                self._history.append(Message.tool(call.id, call.name, result.to_model_content()))
+                self.events.fire("on_tool_result", call.name, result)
+                reply = (
+                    "Okay, I've left that alone."
+                    if result.terminal and not result.ok
+                    else result.summary
+                    if result.ok
+                    else f"I couldn't complete that: {result.summary}"
+                )
+                self._history.append(Message.assistant(reply))
+                stats.steps = 1
+                stats.tool_calls = 1
+                stats.seconds = time.monotonic() - started
+                self.last_stats = stats
+                self._trim_history()
+                return reply
+
             schemas = self.registry.schemas()
             reply = ""
 
@@ -141,6 +182,25 @@ class Agent:
         except TurnCancelled:
             del self._history[history_start:]
             raise
+
+    def _fast_path_command(self, text: str) -> tuple[str, dict[str, str]] | None:
+        """Recognize only explicit launch/open commands; all other requests use the LLM."""
+        command = text.strip().rstrip(".!?").strip()
+        url_match = _URL_COMMAND.fullmatch(command)
+        if url_match and "open_url" in self.registry:
+            url = url_match.group(1).rstrip(".,!?;:")
+            if url:
+                return "open_url", {"url": url}
+
+        launch_match = _LAUNCH_COMMAND.fullmatch(command)
+        if not launch_match:
+            return None
+        app = launch_match.group(1).strip()
+        known_aliases = {name.casefold() for name in BUILTIN_ALIASES}
+        known_aliases.update(name.strip().casefold() for name in self.settings.tools.app_aliases)
+        if app.casefold() in known_aliases and "launch_application" in self.registry:
+            return "launch_application", {"app": app}
+        return None
 
     def _run_tool_calls(
         self,

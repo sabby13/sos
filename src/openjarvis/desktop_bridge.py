@@ -13,6 +13,7 @@ from typing import Any, TextIO
 
 from .config import API_KEY_ENV, Settings
 from .console import get_logger
+from .diagnostics import sanitize_diagnostic
 from .errors import JarvisError
 
 log = get_logger("desktop")
@@ -32,7 +33,7 @@ _EVENT_CATEGORIES = {
 
 
 def _sanitize_diagnostic(value: str) -> str:
-    value = re.sub(r"https?://\S+", "[redacted-url]", value, flags=re.IGNORECASE)
+    value = re.sub(r"(?:https?|wss?)://\S+", "[redacted-url]", value, flags=re.IGNORECASE)
     value = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [redacted]", value)
     return re.sub(
         r"(?i)\b(api[_-]?key|token|secret|authorization)\s*[:=]\s*\S+",
@@ -170,9 +171,11 @@ class DesktopBridge:
 
     def shutdown(self) -> None:
         self._stopping.set()
-        microphone = self._microphone
-        if microphone is not None:
-            microphone.stop()
+        self._turn_cancel.set()
+        with self._voice_lock:
+            microphone = self._microphone
+            if microphone is not None:
+                microphone.stop()
         if self._speaker is not None:
             self._speaker.stop()
         with self._confirmation_lock:
@@ -229,7 +232,7 @@ class DesktopBridge:
         try:
             models = OllamaClient().list_models()
         except OllamaError as exc:
-            log.warning("Ollama status unavailable: %s", _sanitize_diagnostic(str(exc)))
+            log.warning("Ollama status unavailable: %s", sanitize_diagnostic(str(exc)))
             self.emit(
                 "ollama-status",
                 requestId=request_id,
@@ -359,11 +362,21 @@ class DesktopBridge:
                 return
             self.emit("state", state="speaking")
             speaker.speak(text, block=True)
+            from .speech.tts import FallbackSpeaker
+
+            if isinstance(speaker, FallbackSpeaker) and speaker.consume_fallback_notice():
+                with self._active_lock:
+                    request_id = self._active_request_id
+                self.emit(
+                    "speech-fallback",
+                    requestId=request_id,
+                    message="Neural voice unavailable; using the system voice.",
+                )
         except Exception as exc:  # noqa: BLE001 -- speech output must not fail a completed turn.
             log.warning(
                 "speech output unavailable (%s): %s",
                 type(exc).__name__,
-                _sanitize_diagnostic(str(exc)),
+                sanitize_diagnostic(str(exc)),
             )
             with self._active_lock:
                 request_id = self._active_request_id
@@ -388,7 +401,11 @@ class DesktopBridge:
             if self._turn_cancel.is_set():
                 return
             self.emit("state", state="processing")
-            response = self._get_agent().ask(text, cancel_event=self._turn_cancel)
+            response = self._get_agent().ask(
+                text,
+                cancel_event=self._turn_cancel,
+                fast_path=request_type == "voice",
+            )
             if self._turn_cancel.is_set():
                 return
             self.emit("reply", requestId=request_id, text=response)
@@ -400,7 +417,7 @@ class DesktopBridge:
             log.warning(
                 "desktop request failed (%s): %s",
                 type(exc).__name__,
-                _sanitize_diagnostic(exc.message),
+                sanitize_diagnostic(exc.message),
             )
             self.emit(
                 "error",
@@ -417,7 +434,7 @@ class DesktopBridge:
                 "unexpected desktop request failure %s (%s): %s",
                 request_id,
                 type(exc).__name__,
-                _sanitize_diagnostic(str(exc)),
+                sanitize_diagnostic(str(exc)),
             )
             self.emit(
                 "error",
@@ -486,7 +503,7 @@ class DesktopBridge:
             log.warning(
                 "local chat failed (%s): %s",
                 type(exc).__name__,
-                _sanitize_diagnostic(str(exc)),
+                sanitize_diagnostic(str(exc)),
             )
             self.emit(
                 "error",
@@ -501,7 +518,7 @@ class DesktopBridge:
                 "unexpected local chat failure %s (%s): %s",
                 request_id,
                 type(exc).__name__,
-                _sanitize_diagnostic(str(exc)),
+                sanitize_diagnostic(str(exc)),
             )
             self.emit("error", requestId=request_id, message="Local chat could not be completed.")
             final_state = "error"
@@ -528,39 +545,39 @@ class DesktopBridge:
         from .speech.audio import Microphone, record_utterance
         from .speech.stt import Transcriber
 
-        self.emit("state", state="listening")
         microphone = Microphone(
             sample_rate=self.settings.speech.sample_rate,
             device=self.settings.speech.input_device,
         )
-        with self._voice_lock:
-            self._microphone = microphone
         try:
-            if self._turn_cancel.is_set():
-                return ""
-            with microphone:
-                utterance = record_utterance(
-                    microphone,
-                    silence_ms=self.settings.speech.silence_ms,
-                    min_utterance_ms=self.settings.speech.min_utterance_ms,
-                    max_seconds=self.settings.speech.max_utterance_s,
-                    sensitivity=self.settings.speech.vad_sensitivity,
-                    start_timeout_s=15,
-                    cancel_event=self._turn_cancel,
-                )
+            with self._voice_lock:
+                if self._turn_cancel.is_set() or self._stopping.is_set():
+                    return ""
+                microphone.start()
+                self._microphone = microphone
+            self.emit("state", state="listening", requestId=self._active_request_id)
+            utterance = record_utterance(
+                microphone,
+                silence_ms=self.settings.speech.silence_ms,
+                min_utterance_ms=self.settings.speech.min_utterance_ms,
+                max_seconds=self.settings.speech.max_utterance_s,
+                sensitivity=self.settings.speech.vad_sensitivity,
+                start_timeout_s=15,
+                cancel_event=self._turn_cancel,
+            )
             if self._turn_cancel.is_set():
                 return ""
             if utterance is None:
                 return ""
             self.emit("state", state="transcribing")
             transcriber = Transcriber(self.settings)
-            transcript = transcriber.transcribe(
-                utterance.to_wav(self.settings.speech.sample_rate)
-            )
+            transcript = transcriber.transcribe(utterance.to_wav(self.settings.speech.sample_rate))
             return "" if self._turn_cancel.is_set() else transcript
         finally:
             with self._voice_lock:
-                self._microphone = None
+                if self._microphone is microphone:
+                    self._microphone = None
+                microphone.stop()
 
 
 class _DesktopConfirmer:

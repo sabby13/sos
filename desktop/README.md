@@ -34,13 +34,19 @@ then the Python launcher (`py -3`). The bridge uses newline-delimited JSON over
 stdin/stdout, while diagnostics remain on stderr. Bridge events are classified as
 user/assistant messages, status, tool results, or errors; only conversational message
 events enter chat history. Voice playback failures are reported as temporary status
-and do not replace a completed command result or assistant response.
+and do not replace a completed command result or assistant response. Sonia Neural TTS
+attempts to fall back to the offline system voice if synthesis or playback fails. The bridge reports
+the listening state only after the microphone stream starts; if the backend exits, the
+Electron process retries startup a few times before requiring a tray-menu restart.
 
 The voice button is push-to-talk: click once, speak, and pause. Voice capture,
 transcription, the model/tool loop, safety approval, and speech playback run in
 the Python backend. The bridge intentionally serializes turns so the assistant
 does not open duplicate microphone or playback sessions. Potentially unsafe
 actions show the OpenJarvis safety preview and require explicit approval.
+Unambiguous voice commands to open a recognized application or explicit URL use the
+same registered tools and safety policy locally; ambiguous requests still go to the
+configured agent.
 
 ## Settings and controls
 
