@@ -205,25 +205,36 @@ def record_utterance(
     quiet_run = 0
     waited = 0
 
+    empty_wait_s = 0.0
+    stall_timeout_s = 2.0
+    read_timeout = 0.1 if cancel_event is not None else stall_timeout_s
+
     while len(collected) < max_blocks:
         if cancel_event is not None and cancel_event.is_set():
             return None
-        block = mic.read(timeout=0.1 if cancel_event is not None else 2.0)
+        block = mic.read(timeout=read_timeout)
         if cancel_event is not None and cancel_event.is_set():
             return None
         if block is None:
-            if speaking:
-                break  # stream stalled mid-utterance; keep what we have
-            return None
+            empty_wait_s += read_timeout
+            if empty_wait_s >= stall_timeout_s:
+                if speaking:
+                    break  # stream stalled mid-utterance; keep what we have
+                return None
+            continue
+        empty_wait_s = 0.0
 
         level = rms(block)
         peak = max(peak, level)
 
         if not speaking:
-            # Track the floor downward while waiting, so a quiet room stays sensitive.
-            noise_floor = min(noise_floor, level) * 0.9 + level * 0.1
+            # Update moving noise floor from non-zero audio to avoid
+            # priming/startup zeros collapsing it.
+            if level > 0.0005:
+                noise_floor = noise_floor * 0.95 + level * 0.05
             waited += 1
-            if level > max(noise_floor * sensitivity, 0.01):
+            trigger_level = max(noise_floor * sensitivity, 0.015)
+            if level > trigger_level:
                 speaking = True
                 collected.append(block)
                 continue
@@ -232,7 +243,8 @@ def record_utterance(
             continue
 
         collected.append(block)
-        if level > max(noise_floor * sensitivity, 0.008):
+        silence_threshold = max(noise_floor * (1.0 + (sensitivity - 1.0) * 0.4), 0.010)
+        if level > silence_threshold:
             quiet_run = 0
         else:
             quiet_run += 1

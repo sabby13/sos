@@ -404,7 +404,7 @@ class DesktopBridge:
             response = self._get_agent().ask(
                 text,
                 cancel_event=self._turn_cancel,
-                fast_path=request_type == "voice",
+                fast_path=True,
             )
             if self._turn_cancel.is_set():
                 return
@@ -554,6 +554,8 @@ class DesktopBridge:
                 if self._turn_cancel.is_set() or self._stopping.is_set():
                     return ""
                 microphone.start()
+                if hasattr(microphone, "drain"):
+                    microphone.drain()
                 self._microphone = microphone
             self.emit("state", state="listening", requestId=self._active_request_id)
             utterance = record_utterance(
@@ -569,7 +571,7 @@ class DesktopBridge:
                 return ""
             if utterance is None:
                 return ""
-            self.emit("state", state="transcribing")
+            self.emit("state", state="transcribing", requestId=self._active_request_id)
             transcriber = Transcriber(self.settings)
             transcript = transcriber.transcribe(utterance.to_wav(self.settings.speech.sample_rate))
             return "" if self._turn_cancel.is_set() else transcript

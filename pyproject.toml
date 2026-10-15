@@ -39,7 +39,7 @@ voice = [
     "numpy>=1.24",
     "openwakeword>=0.6.0",
     "onnxruntime>=1.17",
-    "edge-tts>=6.1",   # free neural voices, no API key
+    "edge-tts>=7.3.1", # free neural voices, no API key (protocol v2)
     "pyttsx3>=2.90",   # offline fallback (SAPI5 / NSSpeech / espeak)
 ]
 dev = [

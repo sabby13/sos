@@ -9,5 +9,5 @@ sounddevice>=0.4.6      # PortAudio bindings for microphone capture
 numpy>=1.24             # audio buffers and the energy VAD
 openwakeword>=0.6.0     # local "hey jarvis" detection
 onnxruntime>=1.17       # inference backend for the wake-word model
-edge-tts>=6.1           # free neural voices, no API key
+edge-tts>=7.3.1         # free neural voices, no API key (protocol v2)
 pyttsx3>=2.90           # offline TTS fallback (SAPI5 / NSSpeech / espeak)

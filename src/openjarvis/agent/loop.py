@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
+from typing import Any
 
 from ..config import Settings
 from ..console import get_logger
@@ -34,8 +35,34 @@ from ..tools.registry import ToolRegistry, default_registry
 from .prompts import build_system_prompt
 
 log = get_logger("agent")
-_LAUNCH_COMMAND = re.compile(r"(?:please\s+)?(?:open|launch|start)\s+(.+)", re.IGNORECASE)
-_URL_COMMAND = re.compile(r"(?:please\s+)?open\s+((?:https?://|www\.)\S+)", re.IGNORECASE)
+_LAUNCH_COMMAND = re.compile(
+    r"(?:please\s+)?(?:open|launch|start|run)\s+(?:the\s+)?(.+)",
+    re.IGNORECASE,
+)
+_URL_COMMAND = re.compile(
+    r"(?:please\s+)?(?:open|go\s+to|visit)\s+((?:https?://|www\.)\S+)",
+    re.IGNORECASE,
+)
+_DOMAIN_COMMAND = re.compile(
+    r"(?:please\s+)?(?:open|go\s+to|visit)\s+([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+(?:/\S*)?)",
+    re.IGNORECASE,
+)
+_SEARCH_COMMAND = re.compile(
+    r"(?:please\s+)?(?:search\s+for|search\s+the\s+web\s+for|google|search)\s+(.+)",
+    re.IGNORECASE,
+)
+_WINDOW_COMMAND = re.compile(
+    r"(?:please\s+)?(close|minimize|maximize|restore|switch\s+to|focus)\s+(?:the\s+)?(.+?)(?:\s+window)?$",
+    re.IGNORECASE,
+)
+_LIST_WINDOWS_COMMAND = re.compile(
+    r"(?:please\s+)?(?:what\s+windows\s+are\s+open|what\s+do\s+i\s+have\s+open|list\s+windows|show\s+open\s+windows)$",
+    re.IGNORECASE,
+)
+_LIST_APPS_COMMAND = re.compile(
+    r"(?:please\s+)?(?:list\s+apps|list\s+applications|what\s+apps\s+are\s+installed)$",
+    re.IGNORECASE,
+)
 
 
 class TurnCancelled(Exception):
@@ -183,23 +210,55 @@ class Agent:
             del self._history[history_start:]
             raise
 
-    def _fast_path_command(self, text: str) -> tuple[str, dict[str, str]] | None:
-        """Recognize only explicit launch/open commands; all other requests use the LLM."""
+    def _fast_path_command(self, text: str) -> tuple[str, dict[str, Any]] | None:
+        """Recognize safe explicit desktop commands to save LLM round trips and token quotas."""
         command = text.strip().rstrip(".!?").strip()
-        url_match = _URL_COMMAND.fullmatch(command)
+
+        # 1. URL opening (full URL or domain)
+        url_match = _URL_COMMAND.fullmatch(command) or _DOMAIN_COMMAND.fullmatch(command)
         if url_match and "open_url" in self.registry:
             url = url_match.group(1).rstrip(".,!?;:")
             if url:
                 return "open_url", {"url": url}
 
-        launch_match = _LAUNCH_COMMAND.fullmatch(command)
-        if not launch_match:
-            return None
-        app = launch_match.group(1).strip()
+        # 2. Web search
+        search_match = _SEARCH_COMMAND.fullmatch(command)
+        if search_match and "web_search" in self.registry:
+            query = search_match.group(1).strip()
+            if query:
+                return "web_search", {"query": query}
+
+        # 3. Application launching
         known_aliases = {name.casefold() for name in BUILTIN_ALIASES}
         known_aliases.update(name.strip().casefold() for name in self.settings.tools.app_aliases)
-        if app.casefold() in known_aliases and "launch_application" in self.registry:
-            return "launch_application", {"app": app}
+
+        launch_match = _LAUNCH_COMMAND.fullmatch(command)
+        if launch_match and "launch_application" in self.registry:
+            app = launch_match.group(1).strip()
+            app_clean = re.sub(r"\s+(?:app|application)$", "", app, flags=re.I).strip()
+            if app_clean.casefold() in known_aliases:
+                return "launch_application", {"app": app_clean}
+            if app.casefold() in known_aliases:
+                return "launch_application", {"app": app}
+
+        # 4. Window control (close, minimize, maximize, restore, switch to / focus)
+        window_match = _WINDOW_COMMAND.fullmatch(command)
+        if window_match and "control_window" in self.registry:
+            verb = window_match.group(1).lower()
+            action = "focus" if ("switch" in verb or "focus" in verb) else verb
+            target = window_match.group(2).strip()
+            target_clean = re.sub(r"\s+(?:app|application)$", "", target, flags=re.I).strip()
+            if target_clean:
+                return "control_window", {"title": target_clean, "action": action}
+
+        # 5. List windows
+        if _LIST_WINDOWS_COMMAND.fullmatch(command) and "list_windows" in self.registry:
+            return "list_windows", {}
+
+        # 6. List applications
+        if _LIST_APPS_COMMAND.fullmatch(command) and "list_applications" in self.registry:
+            return "list_applications", {}
+
         return None
 
     def _run_tool_calls(
