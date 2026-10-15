@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import textwrap
 from urllib.error import URLError
 from urllib.parse import quote_plus, urlparse
 from urllib.request import Request, urlopen
@@ -122,8 +123,10 @@ class PlayYouTube(Tool[PlayYouTubeArgs]):
         if not ctx.platform.open_url(url, ctx.settings.tools.browser):
             raise ToolError(f"No browser was available to play {title!r} on YouTube.")
 
+        concise_title = re.sub(r"\s+", " ", title).strip()
+        concise_title = textwrap.shorten(concise_title, width=56, placeholder="...")
         return ToolResult.success(
-            f"Opened '{title}' on YouTube for playback.",
+            f"Playing {concise_title} on YouTube.",
             {"title": title, "url": url},
         )
 

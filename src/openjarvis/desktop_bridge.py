@@ -42,6 +42,33 @@ def _sanitize_diagnostic(value: str) -> str:
     )
 
 
+def _tool_start_status(name: str) -> str:
+    return {
+        "play_youtube": "Finding a track on YouTube…",
+        "launch_application": "Opening the requested application…",
+        "open_url": "Opening the requested page…",
+        "web_search": "Searching the web…",
+    }.get(name, "Working on the requested action…")
+
+
+def _tool_result_status(name: str, ok: bool, summary: str, data: Any) -> str:
+    if name == "play_youtube":
+        if not ok:
+            return "Could not play music on YouTube."
+        if isinstance(data, dict) and data.get("duplicate"):
+            if data.get("previous_ok") is False:
+                return "That track was already attempted for this request."
+            return "That track was already opened for this request."
+        return summary
+    if name == "launch_application":
+        return "Application opened." if ok else "Could not open the application."
+    if name == "open_url":
+        return "Page opened." if ok else "Could not open the page."
+    if name == "web_search":
+        return "Search opened." if ok else "Could not open search results."
+    return "Action completed." if ok else "Could not complete the action."
+
+
 class DesktopBridge:
     """Own one OpenJarvis agent and one active microphone/audio turn."""
 
@@ -325,14 +352,22 @@ class DesktopBridge:
 
         events = AgentEvents(
             on_thinking=lambda: self.emit("state", state="processing"),
-            on_tool_start=lambda name, preview: self.emit(
-                "tool", state="executing", name=name, preview=preview
+            on_tool_start=lambda name, _preview: self.emit(
+                "tool",
+                state="executing",
+                name=name,
+                status=_tool_start_status(name),
             ),
             on_tool_result=lambda name, result: self.emit(
-                "tool-result", name=name, ok=result.ok, summary=result.summary
+                "tool-result",
+                name=name,
+                ok=result.ok,
+                status=_tool_result_status(name, result.ok, result.summary, result.data),
             ),
-            on_blocked=lambda name, reason: self.emit(
-                "tool-blocked", name=name, reason=reason
+            on_blocked=lambda name, _reason: self.emit(
+                "tool-blocked",
+                name=name,
+                status="Action blocked by safety policy.",
             ),
         )
         self._agent = Agent(

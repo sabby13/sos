@@ -87,6 +87,7 @@ class Completion:
     finish_reason: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning: str | None = None
 
     @property
     def wants_tools(self) -> bool:

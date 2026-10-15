@@ -21,6 +21,27 @@ def build_provider(*, max_retries: int = 3, max_wait: float = 8.0):
     )
 
 
+def test_completion_separates_provider_reasoning_from_assistant_content(monkeypatch):
+    provider = build_provider()
+    message = SimpleNamespace(
+        content="The task is complete.",
+        reasoning="Private analysis and self-correction.",
+        reasoning_content=None,
+        tool_calls=[],
+    )
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="stop")],
+        usage=None,
+    )
+    monkeypatch.setattr(provider, "_request", lambda _call: response)
+
+    completion = provider.complete([], tools=[])
+
+    assert completion.message.content == "The task is complete."
+    assert completion.reasoning == "Private analysis and self-correction."
+    assert completion.message.to_wire()["content"] == "The task is complete."
+
+
 def rate_limit_error(headers: dict[str, str] | None = None) -> openai.RateLimitError:
     response = SimpleNamespace(
         status_code=429,

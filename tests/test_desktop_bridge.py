@@ -8,9 +8,14 @@ from threading import Event
 
 import pytest
 
-from openjarvis.desktop_bridge import DesktopBridge
+from openjarvis.desktop_bridge import (
+    DesktopBridge,
+    _tool_result_status,
+    _tool_start_status,
+)
 from openjarvis.errors import SpeechError
 from openjarvis.speech.audio import record_utterance
+from openjarvis.tools.base import ToolResult
 
 
 def test_bridge_reports_safe_settings_and_accepts_shutdown() -> None:
@@ -82,6 +87,78 @@ def test_bridge_classifies_conversation_and_backend_events() -> None:
         "tool_result",
         "error",
     ]
+
+
+def test_tool_statuses_are_concise_and_do_not_expose_arguments() -> None:
+    assert _tool_start_status("play_youtube") == "Finding a track on YouTube…"
+    assert (
+        _tool_result_status(
+            "play_youtube",
+            True,
+            "Playing AP Dhillon on YouTube.",
+            {"title": "AP Dhillon", "url": "https://youtube.example/?token=secret"},
+        )
+        == "Playing AP Dhillon on YouTube."
+    )
+    assert (
+        _tool_result_status(
+            "play_youtube",
+            True,
+            "duplicate",
+            {"duplicate": True},
+        )
+        == "That track was already opened for this request."
+    )
+    assert (
+        _tool_result_status(
+            "play_youtube",
+            True,
+            "duplicate",
+            {"duplicate": True, "previous_ok": False},
+        )
+        == "That track was already attempted for this request."
+    )
+
+
+def test_tool_status_events_do_not_forward_previews_or_result_details(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import openjarvis.agent.loop as agent_loop
+    import openjarvis.llm.openai_compatible as llm
+    import openjarvis.tools.registry as registry
+
+    class CapturingAgent:
+        def __init__(self, *, events, **kwargs) -> None:
+            self.events = events
+            self.ctx = SimpleNamespace(speak=None)
+
+    monkeypatch.setattr(llm, "build_provider", lambda _settings: object())
+    monkeypatch.setattr(registry, "default_registry", lambda: object())
+    monkeypatch.setattr(agent_loop, "Agent", CapturingAgent)
+    output = io.StringIO()
+    bridge = DesktopBridge(output=output)
+    bridge._get_agent()
+    bridge._agent.events.on_tool_start(
+        "play_youtube",
+        "Find and play 'private tool argument' on YouTube",
+    )
+    bridge._agent.events.on_tool_result(
+        "play_youtube",
+        ToolResult.success(
+            "Playing AP Dhillon on YouTube.",
+            {"url": "https://youtube.example/?token=secret"},
+        ),
+    )
+
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [event["status"] for event in events] == [
+        "Finding a track on YouTube…",
+        "Playing AP Dhillon on YouTube.",
+    ]
+    assert all("preview" not in event and "summary" not in event for event in events)
+    assert "private tool argument" not in output.getvalue()
+    assert "youtube.example" not in output.getvalue()
+    assert "secret" not in output.getvalue()
 
 
 def test_bridge_rejects_malformed_text_request_without_calling_provider() -> None:

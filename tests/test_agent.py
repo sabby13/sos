@@ -4,14 +4,43 @@ from __future__ import annotations
 
 import json
 import logging
+from io import BytesIO
 from threading import Event
 
 from conftest import FakeProvider, text_completion, tool_completion
 from openjarvis.agent.loop import Agent, TurnCancelled
 from openjarvis.errors import ProviderError
-from openjarvis.llm.base import Completion, Message
+from openjarvis.llm.base import Completion, Message, ToolCall
 from openjarvis.safety.confirm import AutoConfirmer, DenyConfirmer
 from openjarvis.tools.registry import ToolRegistry, default_registry
+
+
+def youtube_completion(*call_ids: str, query: str = "AP Dhillon") -> Completion:
+    return Completion(
+        message=Message.assistant(
+            None,
+            [
+                ToolCall(
+                    id=call_id,
+                    name="play_youtube",
+                    arguments=json.dumps({"query": query}),
+                )
+                for call_id in call_ids
+            ],
+        ),
+        finish_reason="tool_calls",
+    )
+
+
+def stub_youtube(monkeypatch) -> None:
+    from openjarvis.tools import browser
+
+    monkeypatch.setattr(browser, "urlopen", lambda *args, **kwargs: BytesIO(b""))
+    monkeypatch.setattr(
+        browser,
+        "_first_youtube_video",
+        lambda _page: ("abcdefghijk", "AP Dhillon", None),
+    )
 
 
 def build_agent(settings, platform, tmp_path, script, confirmer=None) -> Agent:
@@ -33,6 +62,140 @@ def tool_messages(agent: Agent) -> list[dict]:
 def test_plain_answer_needs_no_tools(settings, platform, tmp_path):
     agent = build_agent(settings, platform, tmp_path, [text_completion("Hello.")])
     assert agent.ask("hi") == "Hello."
+
+
+def test_provider_reasoning_is_not_returned_or_saved_as_conversation(settings, platform, tmp_path):
+    completion = Completion(
+        message=Message.assistant("The request is complete."),
+        reasoning="Internal self-correction and debug notes must remain private.",
+    )
+    agent = build_agent(settings, platform, tmp_path, [completion])
+
+    assert agent.ask("do the task") == "The request is complete."
+    assert all(
+        "Internal self-correction" not in (message.content or "") for message in agent.history
+    )
+
+
+def test_duplicate_youtube_tool_calls_execute_once_and_replace_malformed_final(
+    settings, platform, tmp_path, monkeypatch
+):
+    stub_youtube(monkeypatch)
+    malformed = (
+        "Let me correct myself. I should not have called play_youtube twice. "
+        "The raw tool arguments were query=AP Dhillon. " * 20
+    )
+    agent = build_agent(
+        settings,
+        platform,
+        tmp_path,
+        [
+            youtube_completion("play-1", "play-2"),
+            youtube_completion("play-3"),
+            text_completion(malformed),
+        ],
+    )
+
+    reply = agent.ask("play AP Dhillon on YouTube")
+
+    assert len(platform.opened_urls) == 1
+    assert reply == "Playing AP Dhillon on YouTube."
+    assert "Let me correct myself" not in reply
+    assert "query=AP Dhillon" not in reply
+    assert all("Let me correct myself" not in (message.content or "") for message in agent.history)
+    assert agent.history[-1].content == "Playing AP Dhillon on YouTube."
+
+
+def test_successful_playback_status_survives_model_step_limit(
+    settings, platform, tmp_path, monkeypatch
+):
+    settings.llm.max_steps = 1
+    stub_youtube(monkeypatch)
+    agent = build_agent(
+        settings,
+        platform,
+        tmp_path,
+        [youtube_completion("play-1")],
+    )
+
+    assert agent.ask("play AP Dhillon on YouTube") == "Playing AP Dhillon on YouTube."
+    assert agent.history[-1].content == "Playing AP Dhillon on YouTube."
+
+
+def test_user_requested_repetition_is_preserved(settings, platform, tmp_path, monkeypatch):
+    stub_youtube(monkeypatch)
+    agent = build_agent(
+        settings,
+        platform,
+        tmp_path,
+        [
+            youtube_completion("play-1", "play-2"),
+            text_completion("I played it twice."),
+        ],
+    )
+
+    assert agent.ask("play AP Dhillon twice", fast_path=False) == "Playing AP Dhillon on YouTube."
+    assert len(platform.opened_urls) == 2
+
+
+def test_negated_repetition_does_not_allow_duplicate_tool_calls(
+    settings, platform, tmp_path, monkeypatch
+):
+    stub_youtube(monkeypatch)
+    agent = build_agent(
+        settings,
+        platform,
+        tmp_path,
+        [youtube_completion("play-1", "play-2"), text_completion("Done.")],
+    )
+
+    assert agent.ask("play AP Dhillon, but don't play it twice") == (
+        "Playing AP Dhillon on YouTube."
+    )
+    assert len(platform.opened_urls) == 1
+
+
+def test_failed_side_effect_attempt_is_not_retried_automatically(
+    settings, platform, tmp_path, monkeypatch
+):
+    stub_youtube(monkeypatch)
+    attempts = []
+    monkeypatch.setattr(
+        platform,
+        "open_url",
+        lambda url, _browser: attempts.append(url) or False,
+    )
+    agent = build_agent(
+        settings,
+        platform,
+        tmp_path,
+        [youtube_completion("play-1", "play-2"), text_completion("I couldn't play that.")],
+    )
+
+    agent.ask("play AP Dhillon on YouTube")
+
+    assert len(attempts) == 1
+
+
+def test_distinct_actions_in_a_multi_step_workflow_are_not_deduplicated(
+    settings, platform, tmp_path, monkeypatch
+):
+    stub_youtube(monkeypatch)
+    agent = build_agent(
+        settings,
+        platform,
+        tmp_path,
+        [
+            youtube_completion("play-1"),
+            tool_completion("open_url", '{"url":"https://example.com"}', "open-1"),
+            text_completion("The work is finished."),
+        ],
+    )
+
+    assert agent.ask("play AP Dhillon and open example.com") == "Playing AP Dhillon on YouTube."
+    assert len(platform.opened_urls) == 2
+    assert platform.opened_urls[0].startswith("https://www.youtube.com/watch?")
+    assert platform.opened_urls[1] == "https://example.com"
 
 
 def test_explicit_voice_launch_uses_safety_checked_tool_without_provider_call(
@@ -122,7 +285,9 @@ def test_cancelled_agent_turn_discards_its_conversation(settings, platform, tmp_
 
 def test_tool_call_executes_then_the_model_summarises(settings, platform, tmp_path):
     agent = build_agent(
-        settings, platform, tmp_path,
+        settings,
+        platform,
+        tmp_path,
         [
             tool_completion("create_folder", json.dumps({"path": str(tmp_path / "Projects")})),
             text_completion("Created the Projects folder."),
@@ -137,7 +302,9 @@ def test_tool_call_executes_then_the_model_summarises(settings, platform, tmp_pa
 def test_tool_results_are_fed_back_to_the_model(settings, platform, tmp_path):
     (tmp_path / "a.txt").write_text("x")
     agent = build_agent(
-        settings, platform, tmp_path,
+        settings,
+        platform,
+        tmp_path,
         [
             tool_completion("list_directory", json.dumps({"path": str(tmp_path)})),
             text_completion("You have one file."),
@@ -149,9 +316,7 @@ def test_tool_results_are_fed_back_to_the_model(settings, platform, tmp_path):
     assert any(m.role == "tool" and "a.txt" in (m.content or "") for m in second_request)
 
 
-def test_provider_failure_after_tool_execution_does_not_replay_action(
-    settings, platform, tmp_path
-):
+def test_provider_failure_after_tool_execution_does_not_replay_action(settings, platform, tmp_path):
     class ProviderFailsAfterLaunch:
         name = "fake"
         model = "fake-model"
@@ -209,7 +374,9 @@ def test_usage_debug_log_uses_provider_metadata_without_logging_transcript(
 def test_a_failing_tool_does_not_end_the_turn(settings, platform, tmp_path):
     """The model must see the error and get a chance to correct itself."""
     agent = build_agent(
-        settings, platform, tmp_path,
+        settings,
+        platform,
+        tmp_path,
         [
             tool_completion("read_text_file", json.dumps({"path": str(tmp_path / "missing.txt")})),
             text_completion("That file doesn't exist."),
@@ -222,7 +389,9 @@ def test_a_failing_tool_does_not_end_the_turn(settings, platform, tmp_path):
 
 def test_invalid_arguments_come_back_as_a_recoverable_error(settings, platform, tmp_path):
     agent = build_agent(
-        settings, platform, tmp_path,
+        settings,
+        platform,
+        tmp_path,
         [
             tool_completion("create_folder", '{"wrong_field": 1}'),
             text_completion("Let me try that differently."),
@@ -236,7 +405,9 @@ def test_invalid_arguments_come_back_as_a_recoverable_error(settings, platform, 
 
 def test_unknown_tool_names_are_reported_not_raised(settings, platform, tmp_path):
     agent = build_agent(
-        settings, platform, tmp_path,
+        settings,
+        platform,
+        tmp_path,
         [tool_completion("hack_the_mainframe", "{}"), text_completion("I can't do that.")],
     )
     agent.ask("do something impossible")
@@ -245,7 +416,9 @@ def test_unknown_tool_names_are_reported_not_raised(settings, platform, tmp_path
 
 def test_malformed_json_arguments_are_survivable(settings, platform, tmp_path):
     agent = build_agent(
-        settings, platform, tmp_path,
+        settings,
+        platform,
+        tmp_path,
         [tool_completion("create_folder", "{not json at all"), text_completion("Retrying.")],
     )
     agent.ask("make a folder")
@@ -256,7 +429,9 @@ def test_declining_a_confirmation_stops_the_turn(settings, platform, tmp_path):
     victim = tmp_path / "precious.txt"
     victim.write_text("keep me")
     agent = build_agent(
-        settings, platform, tmp_path,
+        settings,
+        platform,
+        tmp_path,
         [
             tool_completion("delete_item", json.dumps({"path": str(victim)})),
             text_completion("This should never be reached."),
@@ -277,7 +452,9 @@ def test_safe_tools_never_prompt(settings, platform, tmp_path):
             raise AssertionError(f"should not have been asked about {title}")
 
     agent = build_agent(
-        settings, platform, tmp_path,
+        settings,
+        platform,
+        tmp_path,
         [
             tool_completion("list_directory", json.dumps({"path": str(tmp_path)})),
             text_completion("Empty."),

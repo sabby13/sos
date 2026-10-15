@@ -177,7 +177,9 @@ function App() {
         case 'reply':
           if (event.category === 'assistant_message' && event.text) {
             addMessage('assistant', event.text, event.requestId ? `${event.requestId}-reply` : undefined)
-            setPillMessage(event.text)
+            setPillMessage(
+              event.text.length > 180 ? 'Response ready in chat.' : event.text,
+            )
             if (event.requestId) chatRequestsRef.current.delete(event.requestId)
             setChatError(null)
           }
@@ -268,16 +270,16 @@ function App() {
           break
         case 'tool':
           setState('executing')
-          setToolActivity(event.preview || event.name || 'Working with a tool')
-          setPillMessage(event.preview || event.name || 'Working with a tool')
+          setToolActivity(event.status || 'Working on the requested action…')
+          setPillMessage(event.status || 'Working on the requested action…')
           break
         case 'tool-result':
-          setToolActivity(`${event.ok ? 'Completed' : 'Could not complete'}: ${event.summary ?? event.name ?? 'tool action'}`)
-          setPillMessage(event.summary ?? event.name ?? 'Tool action complete')
+          setToolActivity(event.status || (event.ok ? 'Action completed.' : 'Could not complete the action.'))
+          setPillMessage(event.status || (event.ok ? 'Action completed.' : 'Could not complete the action.'))
           break
         case 'tool-blocked':
-          setToolActivity(`Blocked by safety policy: ${event.reason ?? event.name ?? 'action'}`)
-          setPillMessage('Action blocked by safety policy')
+          setToolActivity(event.status || 'Action blocked by safety policy.')
+          setPillMessage(event.status || 'Action blocked by safety policy.')
           break
         case 'confirmation':
           if (event.confirmationId) {

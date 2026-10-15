@@ -32,6 +32,7 @@ declare global {
     direction?: 'left' | 'right'
     width?: number
     state?: string
+    status?: string
     available?: boolean
     models?: { name: string; size: number }[]
     text?: string

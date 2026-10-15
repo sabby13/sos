@@ -102,11 +102,15 @@ class OpenAICompatibleProvider:
             )
 
         usage = getattr(response, "usage", None)
+        reasoning = getattr(raw, "reasoning_content", None)
+        if not isinstance(reasoning, str):
+            reasoning = getattr(raw, "reasoning", None)
         return Completion(
             message=Message.assistant(raw.content, tool_calls),
             finish_reason=choice.finish_reason,
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+            reasoning=reasoning if isinstance(reasoning, str) else None,
         )
 
     # ----------------------------------------------------------------- audio
