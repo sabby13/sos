@@ -74,7 +74,7 @@ button {
 }
 
 .floating-widget.chat-open {
-  width: var(--pill-width, 566px);
+  width: 100%;
   height: 100%;
 }
 
@@ -901,6 +901,7 @@ button {
 
 .chat-open .bar-top {
   z-index: 6;
+  -webkit-app-region: drag;
 }
 
 .chat-open .pill-connector {
@@ -949,9 +950,23 @@ button {
   -webkit-app-region: no-drag;
 }
 
+.chat-open .bar-top button {
+  -webkit-app-region: no-drag;
+}
+
 .chat-menu-button img {
   width: 28px;
   height: 28px;
+}
+
+.chat-open .close-cap {
+  background: transparent;
+}
+
+.floating-widget.chat-open:not(.expands-left) .close-cap {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 .expanded-content {

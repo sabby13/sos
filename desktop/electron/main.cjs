@@ -9,6 +9,8 @@ const PILL_CAP_SIZE = 98
 const PILL_WIDTH = 566
 const CHAT_WIDTH = 566
 const CHAT_HEIGHT = 540
+const CHAT_MIN_WIDTH = 400
+const CHAT_MIN_HEIGHT = 360
 const MAX_BACKEND_RESTARTS = 3
 const defaults = {
   alwaysOnTop: true,
@@ -470,6 +472,7 @@ ipcMain.handle('window:get-pill-layout', () => {
 
 ipcMain.handle('window:set-chat-visible', (_, visible) => {
   if (!mainWindow || mainWindow.isDestroyed() || typeof visible !== 'boolean') return
+  mainWindow.setResizable(visible)
   const current = mainWindow.getBounds()
   const centerX = avatarCenterX(current)
   const display = screen.getDisplayMatching({
@@ -479,6 +482,10 @@ ipcMain.handle('window:set-chat-visible', (_, visible) => {
     height: AVATAR_SIZE,
   })
   const area = display.workArea
+  mainWindow.setMinimumSize(
+    visible ? Math.min(CHAT_MIN_WIDTH, area.width) : AVATAR_SIZE,
+    visible ? Math.min(CHAT_MIN_HEIGHT, area.height) : AVATAR_SIZE,
+  )
   const width = visible ? Math.min(Math.max(CHAT_WIDTH, PILL_WIDTH), area.width) : windowExpanded ? PILL_WIDTH : AVATAR_SIZE
   const height = visible ? Math.min(CHAT_HEIGHT, area.height) : AVATAR_SIZE
   const pillExtra = PILL_WIDTH - AVATAR_SIZE

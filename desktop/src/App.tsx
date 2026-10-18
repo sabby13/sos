@@ -438,6 +438,7 @@ function App() {
   }
 
   const handleDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (chatOpen) return
     if (event.button !== 0 || (event.target instanceof Element && event.target.closest('button'))) return
     dragRef.current = { x: event.screenX, y: event.screenY, moved: false, source: 'header' }
     event.currentTarget.setPointerCapture(event.pointerId)
