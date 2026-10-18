@@ -928,7 +928,7 @@ button {
 }
 
 .chat-open .pill-center {
-  display: none;
+  z-index: 0;
 }
 
 .chat-menu-button {
