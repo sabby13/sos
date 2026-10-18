@@ -163,7 +163,7 @@ button {
   right: 0;
   height: var(--pill-cap-size);
   border-radius: 49px;
-  background: rgba(48, 48, 48, 0.96);
+  background: rgba(12, 12, 14, 0.68);
   opacity: 0;
   transform: scaleX(0.18);
   transform-origin: left center;
@@ -232,6 +232,8 @@ button {
 }
 
 .pill-center {
+  --wordmark-width: 292px;
+  --pill-gap: 18px;
   position: absolute;
   left: var(--pill-cap-size);
   top: 0;
@@ -240,7 +242,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 24px;
+  gap: var(--pill-gap);
   overflow: hidden;
   text-align: center;
   z-index: 2;
@@ -261,19 +263,43 @@ button {
   white-space: nowrap;
 }
 
+.pill-brand-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-app-region: no-drag;
+}
+
+.pill-brand-button:focus {
+  outline: none;
+}
+
+.pill-brand-button:focus-visible {
+  outline: 2px solid var(--sienna-accent);
+  outline-offset: 4px;
+}
+
 .hello-sienna-text {
   display: flex;
-  width: 230px;
-  flex: 0 0 230px;
+  width: var(--wordmark-width, 292px);
+  flex: 0 0 var(--wordmark-width, 292px);
   align-items: center;
   justify-content: center;
   gap: 0;
   color: #ffdb4d;
   font-family: 'LED Counter 7', monospace;
-  font-size: 32px;
+  font-size: 42px;
   font-weight: 400;
   line-height: 1;
-  letter-spacing: 5px;
+  letter-spacing: 4px;
   white-space: nowrap;
 }
 
@@ -286,9 +312,9 @@ button {
 .pill-microphone {
   position: relative;
   z-index: 1;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -305,8 +331,8 @@ button {
 
 .pill-microphone img {
   display: block;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   object-fit: contain;
   transition: scale 220ms ease, opacity 220ms ease;
 }
@@ -317,7 +343,7 @@ button {
 }
 
 .pill-center.active-state-listening .pill-microphone {
-  transform: translateX(-127px);
+  transform: translateX(calc(-0.5 * (var(--wordmark-width) + var(--pill-gap))));
 }
 
 .pill-center:not(.active-state-idle):not(.active-state-listening) .pill-microphone {
