@@ -410,7 +410,7 @@ function App() {
     window.helloSienna.send({ id: requestId, type: 'ask', text })
   }
 
-  const handleVoice = () => {
+  const handleVoice = useCallback(() => {
     if (activeStates.has(state) || voicePending || !backendReady) return
     clearPillStatusTimer()
     const requestId = crypto.randomUUID()
@@ -418,7 +418,7 @@ function App() {
     setVoicePending(true)
     setToolActivity('Listening through your selected microphone…')
     window.helloSienna.send({ id: requestId, type: 'voice' })
-  }
+  }, [backendReady, clearPillStatusTimer, state, voicePending])
 
   const handleCancel = useCallback(() => {
     const requestId = activeRequestIdRef.current
@@ -540,7 +540,10 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.code === 'NumpadMultiply') {
+        event.preventDefault()
+        if (!event.repeat) handleVoice()
+      } else if (event.key === 'Escape') {
         setConfirmation(null)
         if (busy) {
           handleCancel()
@@ -567,7 +570,7 @@ function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [busy, chatOpen, changeChatVisible, changeExpanded, expanded, handleCancel, settingsOpen, toggleChat])
+  }, [busy, chatOpen, changeChatVisible, changeExpanded, expanded, handleCancel, handleVoice, settingsOpen, toggleChat])
 
   return (
     <main className="desktop-shell">
