@@ -51,7 +51,7 @@ const defaultPreferences: Preferences = {
 }
 
 const activeStates = new Set(['listening', 'transcribing', 'processing', 'executing', 'speaking', 'cancelling'])
-const PILL_WIDTH = 606
+const PILL_WIDTH = 566
 
 function DotMatrixWord() {
   return (
@@ -83,6 +83,7 @@ function App() {
   const [pillWidth, setPillWidth] = useState(PILL_WIDTH)
   const [chatOpen, setChatOpen] = useState(false)
   const [chatClosing, setChatClosing] = useState(false)
+  const [chatOpenedAt, setChatOpenedAt] = useState(() => Date.now())
   const [pillMessage, setPillMessage] = useState('')
   const [chatError, setChatError] = useState<ChatError | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -362,6 +363,7 @@ function App() {
       return
     }
     if (visible && !expanded) await changeExpanded(true)
+    if (visible) setChatOpenedAt(Date.now())
     setChatClosing(false)
     setChatOpen(visible)
     if (!visible) setSettingsOpen(false)
@@ -555,6 +557,7 @@ function App() {
         event.preventDefault()
         void (async () => {
           if (!expanded) await changeExpanded(true)
+          setChatOpenedAt(Date.now())
           setChatOpen(true)
           setSettingsOpen(true)
           await window.helloSienna.setChatVisible(true)
@@ -658,12 +661,12 @@ function App() {
               type="button"
               className={`close-cap${busy ? ' cancelling' : ''}${chatOpen ? ' chat-close' : ''}`}
               onClick={() => {
-                if (busy) handleCancel()
-                else if (chatOpen) void changeChatVisible(false)
+                if (chatOpen) void changeChatVisible(false)
+                else if (busy) handleCancel()
                 else void changeExpanded(false)
               }}
-              aria-label={busy ? 'Cancel current request' : chatOpen ? 'Close chat' : 'Collapse HelloSienna'}
-              title={busy ? 'Cancel request' : chatOpen ? 'Close chat' : 'Collapse'}
+              aria-label={chatOpen ? 'Close chat' : busy ? 'Cancel current request' : 'Collapse HelloSienna'}
+              title={chatOpen ? 'Close chat' : busy ? 'Cancel request' : 'Collapse'}
             >
               <img src="./icons/close.svg" alt="" aria-hidden="true" />
             </button>
@@ -783,6 +786,7 @@ function App() {
               </section>
             ) : (
               <>
+                <div className="chat-session-time">{conversationTimestamp(chatOpenedAt).replace(/\s+([AP]M)$/i, '$1')}</div>
                 <div
                   className="chat-body"
                   ref={messagesRef}

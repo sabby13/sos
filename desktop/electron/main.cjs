@@ -6,9 +6,9 @@ const { spawn } = require('child_process')
 const projectRoot = path.resolve(__dirname, '..', '..')
 const AVATAR_SIZE = 98
 const PILL_CAP_SIZE = 98
-const PILL_WIDTH = 606
-const CHAT_WIDTH = 520
-const CHAT_HEIGHT = 600
+const PILL_WIDTH = 566
+const CHAT_WIDTH = 566
+const CHAT_HEIGHT = 540
 const MAX_BACKEND_RESTARTS = 3
 const defaults = {
   alwaysOnTop: true,

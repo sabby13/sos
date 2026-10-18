@@ -70,11 +70,11 @@ button {
 }
 
 .floating-widget.expanded {
-  width: var(--pill-width, 606px);
+  width: var(--pill-width, 566px);
 }
 
 .floating-widget.chat-open {
-  width: var(--pill-width, 606px);
+  width: var(--pill-width, 566px);
   height: 100%;
 }
 
@@ -129,7 +129,7 @@ button {
 }
 
 .expands-left .avatar-wrap {
-  transform: translateX(calc(var(--pill-width, 606px) - 98px));
+  transform: translateX(calc(var(--pill-width, 566px) - 98px));
   transition: none;
 }
 
@@ -204,7 +204,7 @@ button {
 }
 
 .expanded:not(.expands-left) .close-cap {
-  transform: translateX(calc(var(--pill-width, 606px) - 98px));
+  transform: translateX(calc(var(--pill-width, 566px) - 98px));
 }
 
 .expanded .close-cap {
@@ -214,7 +214,7 @@ button {
 
 .expands-left .close-cap {
   left: 0;
-  transform: translateX(calc(var(--pill-width, 606px) - 98px));
+  transform: translateX(calc(var(--pill-width, 566px) - 98px));
 }
 
 .expanded.expands-left .close-cap {
@@ -237,7 +237,7 @@ button {
   position: absolute;
   left: var(--pill-cap-size);
   top: 0;
-  width: calc(var(--pill-width, 606px) - 196px);
+  width: calc(var(--pill-width, 566px) - 196px);
   height: var(--pill-cap-size);
   display: flex;
   align-items: center;
@@ -922,7 +922,7 @@ button {
 }
 
 .chat-closing.expands-left .avatar-wrap {
-  transform: translateX(calc(var(--pill-width, 606px) - 98px));
+  transform: translateX(calc(var(--pill-width, 566px) - 98px));
 }
 
 .chat-open .pill-center {
@@ -952,12 +952,16 @@ button {
   height: 28px;
 }
 
-.chat-open .close-cap,
-.chat-open.expands-left .close-cap {
+.floating-widget.chat-open .close-cap {
   left: auto;
   right: 0;
   transform: none;
   background: #000;
+}
+
+.chat-open .close-cap img {
+  width: 28px;
+  height: 28px;
 }
 
 .expanded-content {
@@ -966,7 +970,7 @@ button {
   height: calc(100% - var(--pill-cap-size));
   border: 0;
   border-radius: 0 0 22px 22px;
-  background: rgba(0, 0, 0, 0.82);
+  background: rgba(0, 0, 0, 0.62);
   box-shadow: none;
   transform-origin: top center;
   animation: chat-unfold 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -981,6 +985,17 @@ button {
   gap: 14px;
   padding: 8px 24px 12px;
   scrollbar-color: rgba(255, 218, 72, 0.28) transparent;
+}
+
+.chat-session-time {
+  flex: 0 0 auto;
+  padding: 8px 0 1px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 20px;
+  font-style: italic;
+  font-weight: 500;
+  line-height: 1.25;
+  text-align: center;
 }
 
 .chat-date {
@@ -1083,7 +1098,7 @@ button {
 .chat-open .composer {
   align-items: center;
   gap: 13px;
-  padding: 0 0 15px;
+  padding: 0 2px 4px;
   border: 0;
 }
 
