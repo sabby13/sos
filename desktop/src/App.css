@@ -965,10 +965,10 @@ button {
 }
 
 .expanded-content {
-  top: calc(var(--pill-cap-size) - 12px);
+  top: calc(var(--pill-cap-size) - 52px);
   width: 100%;
-  height: calc(100% - var(--pill-cap-size) + 12px);
-  padding-top: 12px;
+  height: calc(100% - var(--pill-cap-size) + 52px);
+  padding-top: 52px;
   border: 0;
   border-radius: 0 0 22px 22px;
   background: rgba(0, 0, 0, 0.62);
