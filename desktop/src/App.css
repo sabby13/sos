@@ -916,12 +916,14 @@ button {
     transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.chat-closing .avatar-wrap {
+.floating-widget.chat-closing .avatar-wrap {
   left: 0;
   transform: none;
+  transition: left 240ms cubic-bezier(0.22, 1, 0.36, 1) 180ms,
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1) 180ms;
 }
 
-.chat-closing.expands-left .avatar-wrap {
+.floating-widget.chat-closing.expands-left .avatar-wrap {
   transform: translateX(calc(var(--pill-width, 566px) - 98px));
 }
 
@@ -1253,11 +1255,9 @@ button {
 
 @keyframes chat-fold {
   from {
-    opacity: 1;
     transform: scaleY(1);
   }
   to {
-    opacity: 0;
     transform: scaleY(0.08);
   }
 }
