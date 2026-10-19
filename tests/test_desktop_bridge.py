@@ -8,6 +8,7 @@ from threading import Event
 
 import pytest
 
+from openjarvis import desktop_bridge
 from openjarvis.desktop_bridge import (
     DesktopBridge,
     _tool_result_status,
@@ -425,3 +426,45 @@ def test_microphone_can_retry_after_stream_start_failure(monkeypatch) -> None:
     assert microphone._stream is second
     assert second.started
     microphone.stop()
+
+
+def test_prewarm_audio_loads_the_capture_stack(monkeypatch) -> None:
+    from openjarvis.speech import audio
+
+    warmed = []
+    monkeypatch.setattr(audio, "require_audio", lambda: warmed.append("warm"))
+
+    desktop_bridge._prewarm_audio()
+
+    assert warmed == ["warm"]
+
+
+def test_prewarm_audio_tolerates_an_unavailable_audio_stack(monkeypatch) -> None:
+    from openjarvis.speech import audio
+
+    def unavailable() -> None:
+        raise SpeechError(
+            "Audio capture is unavailable: no sounddevice",
+            hint='Install the voice extras: pip install -e ".[voice]"',
+        )
+
+    monkeypatch.setattr(audio, "require_audio", unavailable)
+
+    desktop_bridge._prewarm_audio()  # startup must not die; text paths keep working.
+
+
+def test_main_prewarms_audio_before_the_bridge_starts(monkeypatch) -> None:
+    from openjarvis import desktop_bridge
+
+    order = []
+
+    class StubBridge:
+        def run(self, *_args: object) -> None:
+            order.append("run")
+
+    monkeypatch.setattr(desktop_bridge, "_prewarm_audio", lambda: order.append("prewarm"))
+    monkeypatch.setattr(desktop_bridge, "DesktopBridge", StubBridge)
+
+    desktop_bridge.main()
+
+    assert order == ["prewarm", "run"]

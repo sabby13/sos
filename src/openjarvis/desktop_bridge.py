@@ -625,7 +625,32 @@ class _DesktopConfirmer:
         return self._confirm(title, detail)
 
 
+def _prewarm_audio() -> None:
+    """Load the capture stack at backend bring-up instead of during the first turn.
+
+    The desktop voice path opens the microphone per turn (VoiceSession on the CLI keeps
+    one stream open for the whole session; this bridge deliberately does not). Opening
+    the stream itself costs a few hundred milliseconds, but importing the audio stack -
+    numpy, sounddevice, PortAudio - used to happen lazily inside the first voice turn,
+    which left a multi-second window with no ``listening`` state, unresponsive
+    cancellation, and a lost first utterance. Warming the import once at startup removes
+    that window; a missing voice install logs here instead of failing startup, so the
+    text-only paths keep working.
+    """
+    try:
+        from .speech.audio import require_audio
+
+        require_audio()
+    except Exception as exc:  # noqa: BLE001 -- bring-up must not die over capture setup.
+        log.warning(
+            "audio capture unavailable at startup (%s): %s",
+            type(exc).__name__,
+            sanitize_diagnostic(str(exc)),
+        )
+
+
 def main() -> None:
+    _prewarm_audio()
     DesktopBridge().run()
 
 
