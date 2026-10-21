@@ -218,13 +218,19 @@ class OpenAICompatibleProvider:
             try:
                 return self._request(call_for_model(fallback_model))
             except ProviderError as exc:
-                # The fallback is capped or unusably absent; report the primary limit.
+                # The fallback is capped or unusably absent; report the primary limit,
+                # and say what happened to the fallback so a decommissioned id is
+                # diagnosable from the surfaced error alone.
                 log.warning(
                     "%s fallback model %r could not serve the request (%s); "
                     "reporting the primary rate limit",
                     self.name, fallback_model, exc.message,
                 )
-                raise primary from exc
+                raise RateLimitProviderError(
+                    f"{primary.message} The fallback model {fallback_model!r} "
+                    f"also failed: {exc.message}",
+                    hint=primary.hint,
+                ) from exc
 
     def _rate_limit_retry_loop(self, call):  # type: ignore[no-untyped-def]
         """The retry policy proper; ends in a value or a rate limit / SDK translation."""
@@ -280,8 +286,11 @@ class OpenAICompatibleProvider:
                     hint=f"Check your API key for {self.name} in .env",
                 ) from exc
             except openai.NotFoundError as exc:
+                # The server's message names the model the request actually carried,
+                # so do not guess from self.model - per-request model switches make
+                # the configured self.model a lie for fallback attempts.
                 raise ProviderError(
-                    f"{self.name} does not have a model named {self.model!r}.",
+                    f"{self.name} does not serve the requested model: {exc}",
                     hint="Run `jarvis models` to see what this provider currently offers.",
                 ) from exc
             except openai.BadRequestError as exc:

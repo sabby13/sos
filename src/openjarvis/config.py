@@ -43,12 +43,14 @@ DEFAULT_LLM_MODELS: dict[str, str] = {
 }
 # Rate-limit fallback: Groq serves free-tier limits per model, so when the workhorse is
 # capped past the retry window, one bounded attempt on a different model keeps the
-# request moving instead of leaving the user in dead air. llama-3.1-8b-instant sits in
-# its own bucket and handles tool calls. OpenAI's org-level envelopes make a silent
-# model switch less predictable, so it disables the fallback by default.
+# request moving instead of leaving the user in dead air. gpt-oss-20b sits in its own
+# bucket, shares the workhorse's tool-calling reliability, and is already in the same
+# vendor-prefixed shape as the primary. Groq rotates and decommissions models
+# (llama-3.1-8b-instant vanished this way), so when this id dies the bridge surfaces the
+# primary rate limit plus the fallback failure, and this default needs refreshing.
 DEFAULT_FALLBACK_MODELS: dict[str, str | None] = {
-    "groq": "llama-3.1-8b-instant",
-    "openai": None,
+    "groq": "openai/gpt-oss-20b",
+    "openai": None,  # OpenAI's org-level envelopes make a silent model switch unpredictable.
 }
 # Groq's whisper-large-v3-turbo and whisper-large-v3 are separately-bucketed models.
 AUDIO_FALLBACK_MODELS: dict[str, str | None] = {

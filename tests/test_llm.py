@@ -315,12 +315,35 @@ def test_unavailable_fallback_model_reports_the_primary_rate_limit(monkeypatch):
 
         return call
 
-    with pytest.raises(ProviderError, match=r"exceeding the configured 2\.0s total retry budget"):
+    with pytest.raises(ProviderError) as raised:
         provider._request_with_model_fallback(
             "test-model", call_for_model, fallback_model="fallback-model"
         )
 
+    message = raised.value.message
+    assert "exceeding the configured 2.0s total retry budget" in message
+    assert "fallback model 'fallback-model' also failed:" in message
     assert models_used == ["test-model", "fallback-model"]
+
+
+def test_not_found_error_names_the_model_the_request_actually_carried():
+    provider = build_provider(max_wait=2.0)
+    server_says = "The model `requested-model` does not exist or you do not have access"
+
+    def call():
+        raise openai.NotFoundError(
+            server_says,
+            response=SimpleNamespace(status_code=404, headers={}, request=SimpleNamespace()),
+            body={"error": {"message": server_says}},
+        )
+
+    with pytest.raises(ProviderError) as raised:
+        provider._request(call)
+
+    message = raised.value.message
+    assert "does not serve the requested model" in message
+    assert server_says in message
+    assert "`test-model`" not in message
 
 
 def test_complete_runs_on_the_fallback_when_the_primary_is_capped():
