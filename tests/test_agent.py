@@ -593,3 +593,101 @@ def test_single_sentence_reply_passes_through_unchanged(settings, platform, tmp_
     agent = build_agent(settings, platform, tmp_path, [text_completion(text)])
 
     assert agent.ask("search Nike shoes on Pinterest") == text
+
+
+LEAKED_REPLY = (
+    "Search results ... ... ... ... Should respond: "
+    '"Pinterest search for charcoal drawings opened." '
+    "Pinterest search for charcoal drawings opened. The assistant already opened the URL. "
+    "The response should be concise, confirming. The previous answer had weird formatting."
+)
+
+
+def test_leaked_planning_text_is_replaced_by_the_planned_answer(settings, platform, tmp_path):
+    """Runtime report: meta/reasoning text reaching Sonia TTS instead of the reply."""
+    script = [
+        tool_completion("open_url", json.dumps({"url": "https://www.pinterest.com"})),
+        text_completion(LEAKED_REPLY),
+    ]
+    agent = build_agent(settings, platform, tmp_path, script)
+
+    reply = agent.ask("open Pinterest and search for charcoal drawings")
+
+    assert reply == "Pinterest search for charcoal drawings opened."
+    assert all(
+        marker not in (message.content or "")
+        for message in agent.history
+        for marker in ("Should respond", "Search results", "The response should be")
+    )
+
+
+def test_leaked_planning_text_without_a_planned_answer_asks_once_then_answers(
+    settings, platform, tmp_path
+):
+    """No quoted planned answer: one corrective round produces the clean final reply."""
+    leaked = (
+        "Search results ... ... ... The assistant already opened the URL. "
+        "The response should be concise, confirming. The previous answer had weird formatting."
+    )
+    script = [
+        tool_completion("open_url", json.dumps({"url": "https://www.pinterest.com"})),
+        text_completion(leaked),
+        text_completion("Pinterest search for charcoal drawings opened."),
+    ]
+    agent = build_agent(settings, platform, tmp_path, script)
+
+    reply = agent.ask("open Pinterest and search for charcoal drawings")
+
+    assert reply == "Pinterest search for charcoal drawings opened."
+    assert not any("Search results" in (m.content or "") for m in agent.history)
+    assert not any("internal planning notes" in (m.content or "") for m in agent.history)
+
+
+def test_leaked_planning_text_without_tools_is_corrected_once(settings, platform, tmp_path):
+    """No tools ran: the corrective pass must still produce a real answer, never the leak."""
+    script = [
+        text_completion(
+            "Search results ... ... ... The assistant already opened the URL. "
+            "The response should be concise, confirming."
+        ),
+        text_completion("It is noon."),
+    ]
+    agent = build_agent(settings, platform, tmp_path, script)
+
+    reply = agent.ask("what time is it")
+
+    assert reply == "It is noon."
+    assert not any("Search results" in (m.content or "") for m in agent.history)
+
+
+def test_persistent_leak_never_reaches_tts_and_falls_back_to_the_tool_summary(
+    settings, platform, tmp_path
+):
+    """Even when the model leaks twice, the summary (never the dump) is what plays."""
+    unquoted_leak = (
+        "Search results ... ... ... The assistant already opened the URL. "
+        "The response should be concise, confirming. The previous answer had weird formatting."
+    )
+    script = [
+        tool_completion("open_url", json.dumps({"url": "https://www.pinterest.com"})),
+        text_completion(unquoted_leak),
+        text_completion(unquoted_leak),
+    ]
+    agent = build_agent(settings, platform, tmp_path, script)
+
+    reply = agent.ask("open Pinterest and search for charcoal drawings")
+
+    assert reply == "Opened www.pinterest.com."
+    assert not any("Search results" in (m.content or "") for m in agent.history)
+
+
+def test_legitimate_answers_survive_the_meta_leak_guard(settings, platform, tmp_path):
+    """Answers that merely quote phrases must not be routed through the correction path."""
+    legitimate = [
+        "You should say: 'Thanks for the update.'",
+        "We need to rename the file first - want me to do that?",
+        "Search results show five laptops in your price range.",
+    ]
+    for text in legitimate:
+        agent = build_agent(settings, platform, tmp_path, [text_completion(text)])
+        assert agent.ask("a question") == text, text

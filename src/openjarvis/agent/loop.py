@@ -93,6 +93,67 @@ def _meaning_tokens(sentence: str) -> set[str]:
     return {token for token in tokens if len(token) > 1 and token not in _REPEAT_NOISE_WORDS}
 
 
+# Phrases that are essentially never part of a user-facing answer. Small reasoning
+# models on Groq (gpt-oss) occasionally write their planning/self-critique text into
+# the final channel - "Should respond: ..." - and that text must never be spoken or
+# stored. This list deliberately leaves out soft planning phrases ("We need to...")
+# that a genuine spoken answer can legitimately contain.
+_META_LEAK_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bshould (?:respond|say)\s*[:\-]",
+        r"\bshould we also\b",
+        r"\bthe response should be\b",
+        r"\bthe previous (?:answer|reply)\b",
+        r"\bthe assistant (?:already|will|should|has to|cannot|opened)\b",
+        r"\bsearch results\s*\.{2,}",
+    )
+)
+
+# Second-tier signal: the dump also discusses the conversation in the third person.
+# Requiring both tiers keeps legitimate answers like "You should say: 'Thanks!'" spoken
+# word-for-word while still catching the planning dumps.
+_META_INTERNAL_REFERENCES = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bthe (?:assistant|user|previous|response)\b",
+        r"\bthe tool(?: result)?s?\b",
+        r"\bwe (?:also )?need to\b",
+    )
+)
+
+# When the model planned its answer inside a leaked dump, it states that answer in
+# quotes. The recovered text is what the model actually intended to say.
+_PLANNED_REPLY = re.compile(
+    r"(?:should\s+(?:respond|say)|respond\s+with|reply\s+with)\s*[:\-]?\s*[\"']([^\"'\n]{4,300})[\"']",
+    re.IGNORECASE,
+)
+
+# One corrective nudge when no planned answer can be recovered. Applied once per turn;
+# the loop's own step limit bounds everything else.
+_REPLY_CORRECTION = (
+    "Your last reply was internal planning notes, not the answer for the user. "
+    "Reply now with only the short user-facing answer."
+)
+
+
+def _reply_contains_meta_leak(reply: str) -> bool:
+    """Two-tier detection: a planning phrase plus third-person internal referencing."""
+    if not any(pattern.search(reply) for pattern in _META_LEAK_PATTERNS):
+        return False
+    return any(pattern.search(reply) for pattern in _META_INTERNAL_REFERENCES)
+
+
+def _recover_planned_reply(reply: str) -> str | None:
+    match = _PLANNED_REPLY.search(reply)
+    if match:
+        recovered = match.group(1).strip()
+        if recovered and not _reply_contains_meta_leak(recovered):
+            return recovered
+        return None
+    return None
+
+
 def _echoes_tool_summary(sentence: str, tool_summaries: list[str]) -> bool:
     """True when a reply sentence merely parrots a tool result summary.
 
@@ -228,6 +289,19 @@ class _RequestToolExecutions:
     actions: dict[str, list[ToolResult]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class MetaLeakRepair:
+    """Outcome of keeping planning text out of a model reply.
+
+    ``corrected`` carries the replacement text (planned answer or tool-summary
+    fallback). ``needs_correction`` asks the loop for one corrective model round.
+    Neither set: the reply was clean and passes through unchanged.
+    """
+
+    corrected: str | None = None
+    needs_correction: bool = False
+
+
 @dataclass
 class Agent:
     settings: Settings
@@ -303,6 +377,7 @@ class Agent:
 
             schemas = self.registry.schemas()
             reply = ""
+            correction_index: int | None = None
 
             for step in range(1, self.settings.llm.max_steps + 1):
                 check_cancelled()
@@ -323,6 +398,15 @@ class Agent:
                     self._history.append(Message.assistant(None, completion.message.tool_calls))
                 else:
                     reply = (completion.message.content or "").strip()
+                    repair = self._repair_meta_leak(reply, history_start, correction_index)
+                    if repair.corrected is not None:
+                        reply = repair.corrected
+                    elif repair.needs_correction:
+                        # Ask the model once for the user-facing answer. The leaked text
+                        # is dropped, not stored, so the conversation never learns it.
+                        correction_index = len(self._history)
+                        self._history.append(Message.user(_REPLY_CORRECTION))
+                        continue
                     reply = _dedupe_reply_sentences(reply, self._turn_tool_summaries(history_start))
                     if playback_statuses:
                         reply = playback_statuses[-1]
@@ -356,17 +440,59 @@ class Agent:
 
             stats.seconds = time.monotonic() - started
             self.last_stats = stats
+            if correction_index is not None:
+                # The one-shot corrective instruction is not part of the conversation:
+                # it only re-aims the model within this turn.
+                del self._history[correction_index]
             self._trim_history()
             return reply or "Done."
         except TurnCancelled:
             del self._history[history_start:]
             raise
 
-    def _turn_tool_summaries(self, history_start: int) -> list[str]:
+    def _repair_meta_leak(
+        self,
+        reply: str,
+        history_start: int,
+        correction_index: int | None,
+    ) -> MetaLeakRepair:
+        """Keep planning text a model leaked into its final channel out of the reply.
+
+        gpt-oss on Groq occasionally writes its analysis into the user-facing message:
+        "Search results ... ... Should respond: \"Pinterest search for charcoal
+        drawings opened.\" ... The previous answer had weird formatting." Detection uses
+        planning phrases plus third-person internals ("the assistant", "the response"),
+        so genuine answers survive untouched. Recovery order:
+        the planned answer the dump quotes in full, else one corrective re-ask, else
+        the turn's last successful tool summary - and the leaked text is never spoken
+        nor stored in the history.
+        """
+        if not _reply_contains_meta_leak(reply):
+            return MetaLeakRepair()
+        planned = _recover_planned_reply(reply)
+        if planned is not None:
+            log.warning(
+                "model leaked planning text into the reply; answering with the planned text"
+            )
+            return MetaLeakRepair(corrected=planned)
+        if correction_index is None:
+            log.warning(
+                "model leaked planning text into the reply; asking once for the user-facing answer"
+            )
+            return MetaLeakRepair(needs_correction=True)
+        ok_summaries = self._turn_tool_summaries(history_start, ok_only=True)
+        log.warning(
+            "model leaked planning text twice; falling back to the tool result summary"
+        )
+        return MetaLeakRepair(corrected=ok_summaries[-1] if ok_summaries else "")
+
+    def _turn_tool_summaries(self, history_start: int, *, ok_only: bool = False) -> list[str]:
         """The summaries the tools of the current turn wrote into the history.
 
         The final reply is shaped against these so a model that parrots a summary or
         restates it in other words does not make the user hear the same outcome twice.
+        With ``ok_only`` the list keeps successful actions only, which is what a
+        last-resort fallback confirmation should be built from.
         """
         summaries: list[str] = []
         for message in self._history[history_start:]:
@@ -376,8 +502,11 @@ class Agent:
                 payload = json.loads(message.content)
             except ValueError:
                 continue
-            if isinstance(payload, dict) and isinstance(payload.get("summary"), str):
-                summaries.append(payload["summary"])
+            if not isinstance(payload, dict) or not isinstance(payload.get("summary"), str):
+                continue
+            if ok_only and not payload.get("ok", False):
+                continue
+            summaries.append(payload["summary"])
         return summaries
 
     def _fast_path_command(self, text: str) -> tuple[str, dict[str, Any]] | None:
