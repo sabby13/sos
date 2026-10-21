@@ -389,6 +389,7 @@ ipcMain.on('backend:request', (event, message) => {
   const allowed = new Set([
     'ask',
     'voice',
+    'voice-chat',
     'get-settings',
     'get-ollama',
     'ollama-chat',

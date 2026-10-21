@@ -57,11 +57,15 @@ configured agent.
   microphone are separate controls: the label opens chat and the microphone starts
   voice capture without changing modes. The chat menu opens settings; its X returns to
   the pill, and the pill X returns to the avatar.
-- Typed chat uses the local Ollama API at `127.0.0.1:11434` by default. Voice requests
-  continue through the configured OpenJarvis agent and speech pipeline. In Settings,
-  choose **OpenJarvis agent** explicitly to route typed requests through the configured
-  provider and its validated tools/safety checks. Local chat never silently falls back
-  to a cloud provider and does not receive desktop tools.
+- Typed chat uses the local Ollama API at `127.0.0.1:11434` by default. In the chat panel
+  the microphone behaves like the chat input: the transcript is sent as a typed message
+  to the panel's selected text provider (local Ollama by default) and the reply is
+  rendered in the conversation - speech output is never used for chat-panel voice. In
+  Settings, choose **OpenJarvis agent** explicitly to route chat messages and voice
+  transcripts through the configured provider and its validated tools/safety checks. The
+  microphone outside the chat panel keeps the configured OpenJarvis agent and speech
+  pipeline. Local chat never silently falls back to a cloud provider and does not
+  receive desktop tools.
 - Install and start Ollama separately if it is not already available. If its local
   service is not running, start it with `ollama serve`. The app lists locally installed
   models and lets you choose one; it never downloads a model. To install one yourself,

@@ -1,6 +1,6 @@
 type DesktopRequest = {
   id: string
-  type: 'ask' | 'voice' | 'get-settings' | 'get-ollama' | 'ollama-chat' | 'configure' | 'confirmation' | 'cancel'
+  type: 'ask' | 'voice' | 'voice-chat' | 'get-settings' | 'get-ollama' | 'ollama-chat' | 'configure' | 'confirmation' | 'cancel'
   text?: string
   model?: string
   messages?: { role: 'user' | 'assistant'; content: string }[]

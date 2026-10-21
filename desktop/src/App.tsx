@@ -107,6 +107,9 @@ function App() {
   const suppressAvatarClickRef = useRef(0)
   const activeRequestIdRef = useRef<string | null>(null)
   const chatRequestsRef = useRef(new Map<string, string>())
+  const voiceChatRef = useRef<string | null>(null)
+  const voiceTranscriptRef = useRef<{ requestId: string; text: string } | null>(null)
+  const voiceChatSubmitRef = useRef<((text: string, requestId: string) => void) | null>(null)
   const pillStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const busy = activeStates.has(state) || voicePending
   const selectedOllamaModel = ollamaModels.some((model) => model.name === preferences.ollamaModel)
@@ -151,7 +154,13 @@ function App() {
           setBackendReady(true)
           setState('idle')
           break
-        case 'state':
+        case 'state': {
+          const stagedTranscript: { requestId: string; text: string } | null =
+            event.state === 'idle' &&
+            voiceTranscriptRef.current &&
+            voiceTranscriptRef.current.requestId === event.requestId
+              ? voiceTranscriptRef.current
+              : null
           setState(event.state === 'error' ? 'idle' : event.state ?? 'idle')
           if (event.state) setVoicePending(false)
           if (event.state === 'idle') {
@@ -168,11 +177,24 @@ function App() {
           } else if (event.state === 'cancelling') {
             setPillMessage('Cancelling…')
           }
+          if (stagedTranscript) {
+            voiceTranscriptRef.current = null
+            addMessage('user', stagedTranscript.text, stagedTranscript.requestId)
+            voiceChatSubmitRef.current?.(stagedTranscript.text, stagedTranscript.requestId)
+          }
           break
+        }
         case 'transcript':
           if (event.category === 'user_message' && event.text) {
-            addMessage('user', event.text, event.requestId)
-            setPillMessage(event.text)
+            if (voiceChatRef.current && voiceChatRef.current === event.requestId) {
+              // Stage the box voice transcript and wait for the backend turn to report
+              // idle - the chat request may only start once the capture turn has
+              // released the backend's single-request lock.
+              voiceTranscriptRef.current = { requestId: event.requestId, text: event.text }
+            } else {
+              addMessage('user', event.text, event.requestId)
+              setPillMessage(event.text)
+            }
           }
           break
         case 'reply':
@@ -374,31 +396,31 @@ function App() {
     await changeChatVisible(!chatOpen)
   }, [changeChatVisible, chatOpen])
 
-  const handleSend = (retryText?: string) => {
-    const text = (retryText ?? input).trim()
-    if (!text || busy) return
-    if (preferences.textProvider === 'ollama' && (!selectedOllamaModel || !ollamaAvailable)) {
-      setToolActivity(
-        ollamaAvailable
-          ? 'Select an installed Ollama model in Settings before sending a local chat.'
-          : 'Ollama is unavailable. Start Ollama and refresh its status in Settings.',
-      )
-      return
+  const localChatBlockingIssue = useCallback(() => {
+    if (preferences.textProvider !== 'ollama') return null
+    if (!selectedOllamaModel || !ollamaAvailable) {
+      return ollamaAvailable
+        ? 'Select an installed Ollama model in Settings before sending a local chat.'
+        : 'Ollama is unavailable. Start Ollama and refresh its status in Settings.'
     }
-    const requestId = crypto.randomUUID()
-    addMessage('user', text, requestId)
+    return null
+  }, [ollamaAvailable, preferences.textProvider, selectedOllamaModel])
+
+  const submitChat = (text: string, requestId: string, precedingMessages: Message[]) => {
     chatRequestsRef.current.set(requestId, text)
     setChatError(null)
-    setInput('')
     setState('processing')
     activeRequestIdRef.current = requestId
     if (preferences.textProvider === 'ollama') {
-      const context = [...messages.slice(-19), {
-        id: requestId,
-        role: 'user' as const,
-        text,
-        createdAt: Date.now(),
-      }].map(({ role, text: content }) => ({ role, content }))
+      const context = [
+        ...precedingMessages.filter((message) => message.id !== requestId).slice(-19),
+        {
+          id: requestId,
+          role: 'user' as const,
+          text,
+          createdAt: Date.now(),
+        },
+      ].map(({ role, text: content }) => ({ role, content }))
       window.helloSienna.send({
         id: requestId,
         type: 'ollama-chat',
@@ -410,15 +432,59 @@ function App() {
     window.helloSienna.send({ id: requestId, type: 'ask', text })
   }
 
+  const handleSend = (retryText?: string) => {
+    const text = (retryText ?? input).trim()
+    if (!text || busy) return
+    const blockingIssue = localChatBlockingIssue()
+    if (blockingIssue) {
+      setToolActivity(blockingIssue)
+      return
+    }
+    const requestId = crypto.randomUUID()
+    addMessage('user', text, requestId)
+    setInput('')
+    submitChat(text, requestId, messages)
+  }
+
   const handleVoice = useCallback(() => {
     if (activeStates.has(state) || voicePending || !backendReady) return
+    if (chatOpen) {
+      const blockingIssue = localChatBlockingIssue()
+      if (blockingIssue) {
+        setToolActivity(blockingIssue)
+        return
+      }
+    }
     clearPillStatusTimer()
     const requestId = crypto.randomUUID()
     activeRequestIdRef.current = requestId
     setVoicePending(true)
     setToolActivity('Listening through your selected microphone…')
-    window.helloSienna.send({ id: requestId, type: 'voice' })
-  }, [backendReady, clearPillStatusTimer, state, voicePending])
+    voiceChatRef.current = chatOpen ? requestId : null
+    window.helloSienna.send({ id: requestId, type: chatOpen ? 'voice-chat' : 'voice' })
+  }, [
+    backendReady,
+    chatOpen,
+    clearPillStatusTimer,
+    localChatBlockingIssue,
+    state,
+    voicePending,
+  ])
+
+  // Box chat voice turns hand their transcript to the chat path once the backend turn
+  // reports idle. The submitter is refreshed after every render so it sees the current
+  // messages, selected model, and text-provider preference.
+  const submitVoiceTranscript = (text: string, requestId: string) => {
+    const blockingIssue = localChatBlockingIssue()
+    if (blockingIssue) {
+      setToolActivity(blockingIssue)
+      return
+    }
+    submitChat(text, requestId, messages)
+  }
+  useEffect(() => {
+    voiceChatSubmitRef.current = submitVoiceTranscript
+  })
 
   const handleCancel = useCallback(() => {
     const requestId = activeRequestIdRef.current

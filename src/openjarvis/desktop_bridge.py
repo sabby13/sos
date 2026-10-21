@@ -141,7 +141,7 @@ class DesktopBridge:
             if request_type == "confirmation":
                 self._resolve_confirmation(request)
                 continue
-            if request_type not in {"ask", "voice", "ollama-chat"}:
+            if request_type not in {"ask", "voice", "voice-chat", "ollama-chat"}:
                 self.emit(
                     "error",
                     requestId=request_id,
@@ -422,9 +422,10 @@ class DesktopBridge:
             )
 
     def _handle_turn(self, request_type: str, request_id: str, text: str) -> None:
+        voice_like = request_type in {"voice", "voice-chat"}
         final_state = "idle"
         try:
-            if request_type == "voice":
+            if voice_like:
                 text = self._capture_voice()
                 if self._turn_cancel.is_set():
                     return
@@ -433,6 +434,12 @@ class DesktopBridge:
                     final_state = "error"
                     return
                 self.emit("transcript", requestId=request_id, text=text)
+                if request_type == "voice-chat":
+                    # A Box chat voice turn hands off right here. The chat panel owns the
+                    # conversation history and forwards the transcript to the selected
+                    # text provider (local Ollama by default), exactly like a typed
+                    # message - so the OpenJarvis agent and the speaker are not used.
+                    return
             if self._turn_cancel.is_set():
                 return
             self.emit("state", state="processing")
@@ -458,7 +465,7 @@ class DesktopBridge:
                 "error",
                 requestId=request_id,
                 message="Voice request could not be completed."
-                if request_type == "voice"
+                if request_type in {"voice", "voice-chat"}
                 else "Request could not be completed.",
             )
             final_state = "error"
@@ -475,7 +482,7 @@ class DesktopBridge:
                 "error",
                 requestId=request_id,
                 message="Voice request could not be completed."
-                if request_type == "voice"
+                if request_type in {"voice", "voice-chat"}
                 else "Request could not be completed.",
             )
             final_state = "error"

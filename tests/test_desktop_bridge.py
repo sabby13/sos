@@ -323,6 +323,128 @@ def test_successful_voice_turn_keeps_message_categories() -> None:
     assert not any(event["type"] == "speech-error" for event in events)
 
 
+def test_box_voice_turn_transcribes_and_hands_off_without_agent_or_speech() -> None:
+    """A chat-panel voice turn is STT only: the renderer continues it as a typed message."""
+
+    class NeverUsedAgent:
+        calls = 0
+
+        def ask(self, text: str, *, cancel_event: Event, fast_path: bool = False) -> str:
+            self.calls += 1
+            return "This agent must not run."
+
+    class NeverUsedSpeaker:
+        def __init__(self) -> None:
+            self.spoken: list[str] = []
+
+        def speak(self, text: str, *, block: bool) -> None:
+            self.spoken.append(text)
+
+    output = io.StringIO()
+    bridge = DesktopBridge(output=output)
+    agent = NeverUsedAgent()
+    speaker = NeverUsedSpeaker()
+    bridge.settings.speech.tts_engine = "edge"
+    bridge._capture_voice = lambda: "what is new in the repo"
+    bridge._get_agent = lambda: agent
+    bridge._get_speaker = lambda: speaker
+    bridge._turn_lock.acquire()
+    bridge._active_request_id = "box-voice-1"
+
+    bridge._handle_turn("voice-chat", "box-voice-1", "")
+
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    transcript = next(event for event in events if event["type"] == "transcript")
+    final_state = [event for event in events if event["type"] == "state"][-1]
+    assert transcript["category"] == "user_message"
+    assert transcript["requestId"] == "box-voice-1"
+    assert transcript["text"] == "what is new in the repo"
+    assert agent.calls == 0
+    assert speaker.spoken == []
+    assert not any(event["type"] == "reply" for event in events)
+    assert final_state["state"] == "idle"
+
+
+def test_box_voice_capture_failure_reports_no_speech_without_running_the_agent() -> None:
+    class NeverUsedAgent:
+        calls = 0
+
+        def ask(self, text: str, *, cancel_event: Event, fast_path: bool = False) -> str:
+            self.calls += 1
+            return "This agent must not run."
+
+    output = io.StringIO()
+    bridge = DesktopBridge(output=output)
+    agent = NeverUsedAgent()
+    bridge._capture_voice = lambda: ""
+    bridge._get_agent = lambda: agent
+    bridge._turn_lock.acquire()
+    bridge._active_request_id = "box-voice-2"
+
+    bridge._handle_turn("voice-chat", "box-voice-2", "")
+
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    error = next(event for event in events if event["type"] == "error")
+    final_state = [event for event in events if event["type"] == "state"][-1]
+    assert error == {
+        "type": "error",
+        "category": "error",
+        "requestId": "box-voice-2",
+        "message": "No speech was detected.",
+    }
+    assert agent.calls == 0
+    assert final_state["state"] == "error"
+
+
+def test_box_voice_cancel_during_capture_never_reaches_the_agent() -> None:
+    class NeverUsedAgent:
+        calls = 0
+
+        def ask(self, text: str, *, cancel_event: Event, fast_path: bool = False) -> str:
+            self.calls += 1
+            return "This agent must not run."
+
+    output = io.StringIO()
+    bridge = DesktopBridge(output=output)
+    agent = NeverUsedAgent()
+    bridge.settings.speech.tts_engine = "edge"
+    bridge._capture_voice = lambda: "partial words before cancellation"
+
+    def cancelled_capture() -> str:
+        bridge._turn_cancel.set()
+        return "partial words before cancellation"
+
+    bridge._capture_voice = cancelled_capture
+    bridge._get_agent = lambda: agent
+    bridge._turn_lock.acquire()
+    bridge._active_request_id = "box-voice-3"
+
+    bridge._handle_turn("voice-chat", "box-voice-3", "")
+
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert agent.calls == 0
+    assert next(
+        event for event in events if event["type"] == "cancelled"
+    )["requestId"] == "box-voice-3"
+    assert not any(event["type"] == "transcript" for event in events)
+    assert not any(event["type"] == "reply" for event in events)
+
+
+def test_rejected_box_voice_request_type_reports_an_error() -> None:
+    output = io.StringIO()
+    bridge = DesktopBridge(output=output)
+    bridge.run(
+        io.StringIO(
+            '{"id":"bad","type":"voice-prompt"}\n'
+            '{"type":"shutdown"}\n'
+        )
+    )
+
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    error = next(event for event in events if event["type"] == "error")
+    assert error["message"] == "Unsupported desktop request: 'voice-prompt'"
+
+
 def test_bridge_validates_local_chat_context() -> None:
     assert DesktopBridge._valid_ollama_chat(
         {
