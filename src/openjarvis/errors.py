@@ -28,6 +28,10 @@ class ProviderError(JarvisError):
     """An LLM / STT / TTS provider could not be reached or returned garbage."""
 
 
+class RateLimitProviderError(ProviderError):
+    """A provider rate limit outlasted the retry budget for this request."""
+
+
 class ToolError(JarvisError):
     """A tool failed in a way the agent should hear about and can recover from."""
 

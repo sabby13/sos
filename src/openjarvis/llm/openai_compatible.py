@@ -17,9 +17,14 @@ from typing import Any
 
 import openai
 
-from ..config import DEFAULT_LLM_MODELS, Settings
+from ..config import (
+    AUDIO_FALLBACK_MODELS,
+    DEFAULT_FALLBACK_MODELS,
+    DEFAULT_LLM_MODELS,
+    Settings,
+)
 from ..console import get_logger
-from ..errors import ProviderError
+from ..errors import ProviderError, RateLimitProviderError
 from .base import Completion, Message, ToolCall
 
 log = get_logger("llm")
@@ -38,6 +43,15 @@ _GROQ_RESET_HEADERS = (
 )
 
 
+class _RateLimitExhausted(Exception):
+    """Internal: a rate limit needs longer than ``rate_limit_max_wait_s`` allows."""
+
+    def __init__(self, error: RateLimitProviderError, cause: Exception) -> None:
+        super().__init__(error.message)
+        self.error = error
+        self.cause = cause
+
+
 class OpenAICompatibleProvider:
     """Chat + audio against any OpenAI-wire-format endpoint."""
 
@@ -53,12 +67,16 @@ class OpenAICompatibleProvider:
         timeout_s: float = 60.0,
         max_retries: int = 3,
         rate_limit_max_wait_s: float = 8.0,
+        fallback_model: str | None = None,
+        audio_fallback_model: str | None = None,
     ) -> None:
         self.name = name
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries
+        self.fallback_model = fallback_model
+        self.audio_fallback_model = audio_fallback_model
         if not 0 <= rate_limit_max_wait_s <= 30:
             raise ValueError("rate_limit_max_wait_s must be between 0 and 30 seconds")
         self.rate_limit_max_wait_s = rate_limit_max_wait_s
@@ -84,7 +102,13 @@ class OpenAICompatibleProvider:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        response = self._request(lambda: self._client.chat.completions.create(**payload))
+        def chat_call(model_name: str):  # type: ignore[no-untyped-def]
+            payload["model"] = model_name
+            return lambda: self._client.chat.completions.create(**payload)
+
+        response = self._request_with_model_fallback(
+            self.model, chat_call, fallback_model=self.fallback_model
+        )
 
         if not response.choices:
             raise ProviderError(f"{self.name} returned no choices.")
@@ -137,7 +161,13 @@ class OpenAICompatibleProvider:
             # Biases the decoder toward domain words - names of apps, folders, etc.
             kwargs["prompt"] = prompt
 
-        result = self._request(lambda: self._client.audio.transcriptions.create(**kwargs))
+        def transcription_call(model_name: str):  # type: ignore[no-untyped-def]
+            kwargs["model"] = model_name
+            return lambda: self._client.audio.transcriptions.create(**kwargs)
+
+        result = self._request_with_model_fallback(
+            kwargs["model"], transcription_call, fallback_model=self.audio_fallback_model
+        )
         # response_format="text" yields a bare string; other formats yield an object.
         text = result if isinstance(result, str) else getattr(result, "text", "")
         return text.strip()
@@ -161,6 +191,43 @@ class OpenAICompatibleProvider:
 
     def _request(self, call):  # type: ignore[no-untyped-def]
         """Run ``call`` with exponential backoff, translating SDK errors."""
+        try:
+            return self._rate_limit_retry_loop(call)
+        except _RateLimitExhausted as exhausted:
+            raise exhausted.error from exhausted.cause
+
+    def _request_with_model_fallback(self, primary_model, call_for_model, *, fallback_model=None):  # type: ignore[no-untyped-def]
+        """Run a model-switchable request; degrade to ``fallback_model`` when capped.
+
+        Groq serves rate limits per model, so when the primary model asks for a wait
+        that outlasts ``rate_limit_max_wait_s`` we do not sleep for it - we spend one
+        bounded attempt on the fallback model instead and keep the user's request
+        moving. Without a fallback (or once the fallback is capped or unavailable) the
+        original rate-limit error surfaces unchanged.
+        """
+        if not fallback_model or fallback_model == primary_model:
+            return self._request(call_for_model(primary_model))
+        try:
+            return self._request(call_for_model(primary_model))
+        except RateLimitProviderError as primary:
+            log.warning(
+                "%s %s is rate limited beyond its %.1fs retry window; "
+                "continuing on fallback model %s",
+                self.name, primary_model, self.rate_limit_max_wait_s, fallback_model,
+            )
+            try:
+                return self._request(call_for_model(fallback_model))
+            except ProviderError as exc:
+                # The fallback is capped or unusably absent; report the primary limit.
+                log.warning(
+                    "%s fallback model %r could not serve the request (%s); "
+                    "reporting the primary rate limit",
+                    self.name, fallback_model, exc.message,
+                )
+                raise primary from exc
+
+    def _rate_limit_retry_loop(self, call):  # type: ignore[no-untyped-def]
+        """The retry policy proper; ends in a value or a rate limit / SDK translation."""
         delay = 1.0
         rate_limit_waited = 0.0
         last_exc: Exception | None = None
@@ -170,7 +237,9 @@ class OpenAICompatibleProvider:
             except openai.RateLimitError as exc:
                 last_exc = exc
                 if attempt == self.max_retries:
-                    raise self._rate_limit_error(attempt, rate_limit_waited) from exc
+                    raise _RateLimitExhausted(
+                        self._rate_limit_error(attempt, rate_limit_waited), exc
+                    ) from exc
 
                 retry_delay = _rate_limit_retry_delay(exc, self.name)
                 if retry_delay is None:
@@ -180,10 +249,13 @@ class OpenAICompatibleProvider:
                     delay = min(delay * 2, _MAX_BACKOFF_S)
 
                 if rate_limit_waited + retry_delay > self.rate_limit_max_wait_s:
-                    raise self._rate_limit_error(
-                        attempt,
-                        rate_limit_waited,
-                        requested_wait=retry_delay,
+                    raise _RateLimitExhausted(
+                        self._rate_limit_error(
+                            attempt,
+                            rate_limit_waited,
+                            requested_wait=retry_delay,
+                        ),
+                        exc,
                     ) from exc
 
                 log.warning(
@@ -245,11 +317,11 @@ class OpenAICompatibleProvider:
         waited: float,
         *,
         requested_wait: float | None = None,
-    ) -> ProviderError:
+    ) -> RateLimitProviderError:
         provider = "Groq" if self.name.lower() == "groq" else self.name
         if requested_wait is not None:
             remaining = max(0.0, self.rate_limit_max_wait_s - waited)
-            return ProviderError(
+            return RateLimitProviderError(
                 f"{provider} rate limit retry needs {requested_wait:.1f}s after "
                 f"{waited:.1f}s already waited, exceeding the configured "
                 f"{self.rate_limit_max_wait_s:.1f}s total retry budget "
@@ -259,7 +331,7 @@ class OpenAICompatibleProvider:
                     "for voice commands."
                 ),
             )
-        return ProviderError(
+        return RateLimitProviderError(
             f"{provider} rate limit persisted after {attempt} attempts and "
             f"{waited:.1f}s of retry waits.",
             hint="Retry shortly or lower llm.history_turns and llm.max_tokens for voice commands.",
@@ -338,8 +410,10 @@ def build_provider(settings: Settings, *, provider: str | None = None) -> OpenAI
     # different one, fall back to that provider's default rather than sending a bad id.
     if name == settings.llm.provider:
         model = settings.llm.resolved_model()
+        fallback_model = settings.llm.resolved_fallback_model()
     else:
         model = DEFAULT_LLM_MODELS[name]
+        fallback_model = DEFAULT_FALLBACK_MODELS[name]
     return OpenAICompatibleProvider(
         name=name,
         api_key=settings.api_key_for(name),
@@ -349,6 +423,7 @@ def build_provider(settings: Settings, *, provider: str | None = None) -> OpenAI
         max_tokens=settings.llm.max_tokens,
         timeout_s=settings.llm.timeout_s,
         rate_limit_max_wait_s=settings.llm.rate_limit_max_wait_s,
+        fallback_model=fallback_model,
     )
 
 
@@ -361,4 +436,5 @@ def build_audio_provider(settings: Settings, provider: str) -> OpenAICompatibleP
         model="",
         timeout_s=settings.llm.timeout_s,
         rate_limit_max_wait_s=settings.llm.rate_limit_max_wait_s,
+        audio_fallback_model=AUDIO_FALLBACK_MODELS.get(provider),
     )

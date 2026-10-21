@@ -41,6 +41,20 @@ DEFAULT_LLM_MODELS: dict[str, str] = {
     "groq": "openai/gpt-oss-120b",
     "openai": "gpt-4o-mini",
 }
+# Rate-limit fallback: Groq serves free-tier limits per model, so when the workhorse is
+# capped past the retry window, one bounded attempt on a different model keeps the
+# request moving instead of leaving the user in dead air. llama-3.1-8b-instant sits in
+# its own bucket and handles tool calls. OpenAI's org-level envelopes make a silent
+# model switch less predictable, so it disables the fallback by default.
+DEFAULT_FALLBACK_MODELS: dict[str, str | None] = {
+    "groq": "llama-3.1-8b-instant",
+    "openai": None,
+}
+# Groq's whisper-large-v3-turbo and whisper-large-v3 are separately-bucketed models.
+AUDIO_FALLBACK_MODELS: dict[str, str | None] = {
+    "groq": "whisper-large-v3",
+    "openai": None,
+}
 DEFAULT_STT_MODELS: dict[str, str] = {
     "groq": "whisper-large-v3-turbo",
     "openai": "whisper-1",
@@ -78,9 +92,17 @@ class LLMConfig(BaseModel):
     # Conversation turns retained between requests (the system prompt is always kept).
     history_turns: int = 20
     timeout_s: float = 60.0
+    # Model switch when the primary model's rate limit outlasts rate_limit_max_wait_s.
+    # None = provider default (see DEFAULT_FALLBACK_MODELS); "" disables the fallback.
+    fallback_model: str | None = None
 
     def resolved_model(self) -> str:
         return self.model or DEFAULT_LLM_MODELS[self.provider]
+
+    def resolved_fallback_model(self) -> str | None:
+        if self.fallback_model is not None:
+            return self.fallback_model or None
+        return DEFAULT_FALLBACK_MODELS[self.provider]
 
 
 class SpeechConfig(BaseModel):
@@ -206,6 +228,7 @@ class Settings(BaseModel):
             ("OPENJARVIS_LLM_MODEL", self.llm, "model", str),
             ("OPENJARVIS_LLM_TEMPERATURE", self.llm, "temperature", float),
             ("OPENJARVIS_RATE_LIMIT_MAX_WAIT_S", self.llm, "rate_limit_max_wait_s", float),
+            ("OPENJARVIS_FALLBACK_MODEL", self.llm, "fallback_model", str),
             ("OPENJARVIS_MAX_STEPS", self.llm, "max_steps", int),
             ("OPENJARVIS_STT_PROVIDER", self.speech, "stt_provider", str),
             ("OPENJARVIS_STT_MODEL", self.speech, "stt_model", str),

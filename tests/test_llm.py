@@ -11,14 +11,65 @@ from openjarvis.errors import ProviderError
 from openjarvis.llm.openai_compatible import OpenAICompatibleProvider
 
 
-def build_provider(*, max_retries: int = 3, max_wait: float = 8.0):
+def build_provider(
+    *,
+    max_retries: int = 3,
+    max_wait: float = 8.0,
+    fallback_model: str | None = None,
+    audio_fallback_model: str | None = None,
+):
     return OpenAICompatibleProvider(
         name="groq",
         api_key="test-key",
         model="test-model",
         max_retries=max_retries,
         rate_limit_max_wait_s=max_wait,
+        fallback_model=fallback_model,
+        audio_fallback_model=audio_fallback_model,
     )
+
+
+def chat_response(content: str) -> SimpleNamespace:
+    message = SimpleNamespace(
+        content=content,
+        reasoning=None,
+        reasoning_content=None,
+        tool_calls=[],
+    )
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="stop")],
+        usage=None,
+    )
+
+
+class FakeCompletions:
+    """Stand-in for ``client.chat.completions`` that records the requested model."""
+
+    def __init__(self, outcomes) -> None:
+        self.outcomes = outcomes
+        self.models: list[str] = []
+
+    def create(self, **payload):
+        self.models.append(payload["model"])
+        result = next(self.outcomes)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+class FakeTranscriptions:
+    """Stand-in for ``client.audio.transcriptions`` that records the requested model."""
+
+    def __init__(self, outcomes) -> None:
+        self.outcomes = outcomes
+        self.models: list[str] = []
+
+    def create(self, **kwargs):
+        self.models.append(kwargs["model"])
+        result = next(self.outcomes)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 def test_completion_separates_provider_reasoning_from_assistant_content(monkeypatch):
@@ -193,3 +244,115 @@ def test_invalid_retry_after_fails_clearly_when_retry_budget_is_zero(monkeypatch
 
     with pytest.raises(ProviderError, match="No further retry was attempted"):
         provider._request(call)
+
+
+def test_rate_limit_over_budget_continues_on_fallback_model(monkeypatch):
+    provider = build_provider(max_wait=2.0, fallback_model="fallback-model")
+    sleeps: list[float] = []
+    monkeypatch.setattr("openjarvis.llm.openai_compatible.time.sleep", sleeps.append)
+    models_used: list[str] = []
+    responses = iter([rate_limit_error({"Retry-After": "50"}), "ok"])
+
+    def call_for_model(model_name: str):
+        def call():
+            models_used.append(model_name)
+            result = next(responses)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        return call
+
+    assert (
+        provider._request_with_model_fallback(
+            "test-model", call_for_model, fallback_model="fallback-model"
+        )
+        == "ok"
+    )
+    assert models_used == ["test-model", "fallback-model"]
+    assert sleeps == []
+
+
+def test_fallback_model_also_rate_limited_reports_the_primary_limit(monkeypatch):
+    provider = build_provider(max_wait=2.0, fallback_model="fallback-model")
+    sleeps: list[float] = []
+    monkeypatch.setattr("openjarvis.llm.openai_compatible.time.sleep", sleeps.append)
+    models_used: list[str] = []
+    responses = iter(
+        [rate_limit_error({"Retry-After": "50"}), rate_limit_error({"Retry-After": "50"})]
+    )
+
+    def call_for_model(model_name: str):
+        def call():
+            models_used.append(model_name)
+            raise next(responses)
+
+        return call
+
+    with pytest.raises(ProviderError, match=r"exceeding the configured 2\.0s total retry budget"):
+        provider._request_with_model_fallback(
+            "test-model", call_for_model, fallback_model="fallback-model"
+        )
+
+    assert models_used == ["test-model", "fallback-model"]
+    assert sleeps == []
+
+
+def test_unavailable_fallback_model_reports_the_primary_rate_limit(monkeypatch):
+    provider = build_provider(max_wait=2.0, fallback_model="fallback-model")
+    models_used: list[str] = []
+
+    def call_for_model(model_name: str):
+        def call():
+            models_used.append(model_name)
+            if model_name == "test-model":
+                raise rate_limit_error({"Retry-After": "50"})
+            raise openai.NotFoundError(
+                "model not found",
+                response=SimpleNamespace(status_code=404, headers={}, request=SimpleNamespace()),
+                body={"error": {"message": "model not found"}},
+            )
+
+        return call
+
+    with pytest.raises(ProviderError, match=r"exceeding the configured 2\.0s total retry budget"):
+        provider._request_with_model_fallback(
+            "test-model", call_for_model, fallback_model="fallback-model"
+        )
+
+    assert models_used == ["test-model", "fallback-model"]
+
+
+def test_complete_runs_on_the_fallback_when_the_primary_is_capped():
+    provider = build_provider(max_wait=2.0, fallback_model="fallback-model")
+    completions = FakeCompletions(
+        iter([rate_limit_error({"Retry-After": "50"}), chat_response("Recovered")])
+    )
+    provider._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    completion = provider.complete([], tools=[])
+
+    assert completions.models == ["test-model", "fallback-model"]
+    assert completion.message.content == "Recovered"
+
+
+def test_complete_without_fallback_keeps_the_budget_error():
+    provider = build_provider(max_wait=2.0)
+    completions = FakeCompletions(iter([rate_limit_error({"Retry-After": "50"})]))
+    provider._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    with pytest.raises(ProviderError, match="No further retry was attempted"):
+        provider.complete([], tools=[])
+
+    assert completions.models == ["test-model"]
+
+
+def test_transcribe_falls_back_to_the_audio_bucket():
+    provider = build_provider(audio_fallback_model="whisper-large-v3")
+    transcriptions = FakeTranscriptions(
+        iter([rate_limit_error({"Retry-After": "50"}), "transcribed text"])
+    )
+    provider._client = SimpleNamespace(audio=SimpleNamespace(transcriptions=transcriptions))
+
+    assert provider.transcribe(b"audio", model="whisper-large-v3-turbo") == "transcribed text"
+    assert transcriptions.models == ["whisper-large-v3-turbo", "whisper-large-v3"]

@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from openjarvis.agent.prompts import SYSTEM_PROMPT, TRANSCRIPTION_HINT
-from openjarvis.config import DEFAULT_LLM_MODELS, DEFAULT_TTS_VOICES, Settings
+from openjarvis.config import (
+    DEFAULT_FALLBACK_MODELS,
+    DEFAULT_LLM_MODELS,
+    DEFAULT_TTS_VOICES,
+    Settings,
+)
 from openjarvis.errors import ConfigError
 from openjarvis.speech.stt import clean_transcript, strip_wake_word
 
@@ -35,6 +40,30 @@ def test_assistant_identity_and_transcription_vocabulary():
 def test_existing_wake_word_loads_from_yaml(tmp_path):
     path = write_config(tmp_path, "speech:\n  wake_word: hey_jarvis\n")
     assert Settings.load(path).speech.wake_word == "hey_jarvis"
+
+
+def test_chat_fallback_model_defaults_to_the_groq_light_model(tmp_path):
+    cfg = Settings.load(tmp_path / "does-not-exist.yaml")
+    assert cfg.llm.resolved_fallback_model() == DEFAULT_FALLBACK_MODELS["groq"]
+
+
+def test_chat_fallback_model_override_and_disable(tmp_path):
+    path = write_config(tmp_path, 'llm:\n  fallback_model: custom-mini\n')
+    assert Settings.load(path).llm.resolved_fallback_model() == "custom-mini"
+
+    path = write_config(tmp_path, 'llm:\n  fallback_model: ""\n')
+    assert Settings.load(path).llm.resolved_fallback_model() is None
+
+
+def test_chat_fallback_model_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENJARVIS_FALLBACK_MODEL", "env-mini")
+    loaded = Settings.load(tmp_path / "does-not-exist.yaml")
+    assert loaded.llm.resolved_fallback_model() == "env-mini"
+
+    monkeypatch.delenv("OPENJARVIS_FALLBACK_MODEL")
+    monkeypatch.setenv("OPENJARVIS_LLM_PROVIDER", "openai")
+    cfg = Settings.load(tmp_path / "does-not-exist.yaml")
+    assert cfg.llm.resolved_fallback_model() is None
 
 
 def test_yaml_overrides_defaults(tmp_path):
