@@ -66,6 +66,93 @@ _LIST_APPS_COMMAND = re.compile(
     re.IGNORECASE,
 )
 
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+_WORD_TOKEN = re.compile(r"[a-z0-9]+")
+
+# Words that cannot identify an outcome on their own: connectives and filler, plus URL
+# scaffolding so "Opened www.pinterest.com." relates cleanly to "Your Pinterest search
+# is open." Everything else - names, objects, numbers - is what distinguishes one
+# statement from another.
+_REPEAT_NOISE_WORDS = frozenset(
+    [
+        "a", "about", "all", "also", "an", "and", "any", "are", "as", "at", "been",
+        "but", "by", "can", "could", "did", "do", "does", "doing", "for", "from",
+        "get", "got", "had", "has", "have", "how", "in", "into", "is", "it", "its",
+        "may", "me", "might", "must", "my", "no", "not", "now", "of", "on", "or",
+        "out", "over", "she", "should", "so", "some", "than", "that", "the", "their",
+        "them", "then", "there", "these", "they", "this", "those", "to", "too", "up",
+        "us", "was", "we", "were", "what", "when", "where", "which", "while", "who",
+        "why", "will", "with", "would", "you", "your", "com", "htm", "html", "http",
+        "https", "net", "org", "www",
+    ]
+)
+
+
+def _meaning_tokens(sentence: str) -> set[str]:
+    tokens = _WORD_TOKEN.findall(sentence.lower())
+    return {token for token in tokens if len(token) > 1 and token not in _REPEAT_NOISE_WORDS}
+
+
+def _echoes_tool_summary(sentence: str, tool_summaries: list[str]) -> bool:
+    """True when a reply sentence merely parrots a tool result summary.
+
+    The model receives ``{"ok": true, "summary": "Opened www.pinterest.com."}`` and is
+    prone to repeating that summary inside its own reply before adding its own closer.
+    The echo carries no information the summary did not, so it is recognized by its
+    meaningful words being contained in the summary's. A richer sentence - one that
+    adds the search terms, a follow-up, or a question - is never an echo.
+    """
+    tokens = _meaning_tokens(sentence)
+    if not tokens:
+        return False
+    return any(tokens <= _meaning_tokens(summary) for summary in tool_summaries)
+
+
+def _sentences_repeat(first: str, second: str) -> bool:
+    """True when two sentences state the same outcome in different words.
+
+    This is the paraphrase duplicate the user hears: "Pinterest is open with results
+    for Nike shoes." followed by "Pinterest is open showing Nike shoes." Their
+    distinctive words (pinterest, open, nike, shoes) coincide even though no wording
+    does. Loosely related sentences - action plus a follow-up question, or a summary
+    plus a genuinely new detail - do not share enough of their meaningful words.
+    """
+    first_tokens, second_tokens = _meaning_tokens(first), _meaning_tokens(second)
+    if not first_tokens or not second_tokens:
+        return False
+    shared = first_tokens & second_tokens
+    return len(shared) >= 2 and len(shared) / min(len(first_tokens), len(second_tokens)) >= 0.6
+
+
+def _dedupe_reply_sentences(reply: str, tool_summaries: list[str] | None = None) -> str:
+    """Collapse sentences that re-confirm what an earlier sentence already said.
+
+    Small models occasionally echo a tool result's summary and then restate it in
+    their own words, so the spoken confirmation plays twice. Echoed summaries are
+    dropped only while another sentence in the reply still carries the turn; when the
+    whole reply is the summary it stays, since it is the only confirmation. When a new
+    sentence repeats a kept one, the new wording wins: it is the model's own closer
+    rather than the parroted echo.
+    """
+    sentences = [part.strip() for part in _SENTENCE_BOUNDARY.split(reply.strip()) if part.strip()]
+    if tool_summaries and len(sentences) > 1:
+        without_echo = [
+            sentence
+            for sentence in sentences
+            if not _echoes_tool_summary(sentence, tool_summaries)
+        ]
+        if without_echo:
+            sentences = without_echo
+    kept: list[str] = []
+    for sentence in sentences:
+        for index, existing in enumerate(kept):
+            if _sentences_repeat(existing, sentence):
+                kept[index] = sentence
+                break
+        else:
+            kept.append(sentence)
+    return " ".join(kept) if kept else reply.strip()
+
 
 def _explicit_repeat_limit(text: str) -> int:
     lowered = text.casefold()
@@ -236,6 +323,7 @@ class Agent:
                     self._history.append(Message.assistant(None, completion.message.tool_calls))
                 else:
                     reply = (completion.message.content or "").strip()
+                    reply = _dedupe_reply_sentences(reply, self._turn_tool_summaries(history_start))
                     if playback_statuses:
                         reply = playback_statuses[-1]
                     self._history.append(Message.assistant(reply))
@@ -273,6 +361,24 @@ class Agent:
         except TurnCancelled:
             del self._history[history_start:]
             raise
+
+    def _turn_tool_summaries(self, history_start: int) -> list[str]:
+        """The summaries the tools of the current turn wrote into the history.
+
+        The final reply is shaped against these so a model that parrots a summary or
+        restates it in other words does not make the user hear the same outcome twice.
+        """
+        summaries: list[str] = []
+        for message in self._history[history_start:]:
+            if message.role != "tool" or not message.content:
+                continue
+            try:
+                payload = json.loads(message.content)
+            except ValueError:
+                continue
+            if isinstance(payload, dict) and isinstance(payload.get("summary"), str):
+                summaries.append(payload["summary"])
+        return summaries
 
     def _fast_path_command(self, text: str) -> tuple[str, dict[str, Any]] | None:
         """Recognize safe explicit desktop commands to save LLM round trips and token quotas."""

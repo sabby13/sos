@@ -536,3 +536,60 @@ def test_empty_registry_still_answers(settings, platform, tmp_path):
         confirmer=AutoConfirmer(),
     )
     assert agent.ask("hello") == "No tools needed."
+
+
+def test_paraphrased_repeated_confirmations_are_spoken_once(settings, platform, tmp_path):
+    """A small model restating an outcome it just phrased must not become a double reply.
+
+    Runtime report: "Pinterest is open with results for Nike shoes. Pinterest is open
+    showing Nike shoes." - two sentences, one fact, both spoken.
+    """
+    script = [
+        tool_completion("open_url", json.dumps({"url": "https://www.pinterest.com"})),
+        text_completion(
+            "Pinterest is open with results for Nike shoes. "
+            "Pinterest is open showing Nike shoes."
+        ),
+    ]
+    agent = build_agent(settings, platform, tmp_path, script)
+
+    reply = agent.ask("open Pinterest and search Nike shoes")
+
+    assert reply == "Pinterest is open showing Nike shoes."
+    assert agent.history[-1].content == reply
+
+
+def test_tool_summary_echo_is_replaced_by_the_model_own_closer(settings, platform, tmp_path):
+    """The parroted summary yields to the model's own wording, so one confirmation plays."""
+    script = [
+        tool_completion(
+            "open_url",
+            json.dumps({"url": "https://www.pinterest.com/search/pins/?q=Nike shoes"}),
+        ),
+        text_completion(
+            "Opened www.pinterest.com. Your Pinterest search for Nike shoes is open."
+        ),
+    ]
+    agent = build_agent(settings, platform, tmp_path, script)
+
+    reply = agent.ask("open Pinterest with Nike shoes")
+
+    assert reply == "Your Pinterest search for Nike shoes is open."
+
+
+def test_distinct_statements_in_one_reply_are_not_collapsed(settings, platform, tmp_path):
+    """Legitimate follow-up detail and questions must survive reply shaping."""
+    distinct = (
+        "Searched the web for Nike shoes. The first result is on the official store, "
+        "and it is cheaper than the others. Should I open it?"
+    )
+    agent = build_agent(settings, platform, tmp_path, [text_completion(distinct)])
+
+    assert agent.ask("search Nike shoes") == distinct
+
+
+def test_single_sentence_reply_passes_through_unchanged(settings, platform, tmp_path):
+    text = "Searching the web for 'Nike shoes on Pinterest'."
+    agent = build_agent(settings, platform, tmp_path, [text_completion(text)])
+
+    assert agent.ask("search Nike shoes on Pinterest") == text
